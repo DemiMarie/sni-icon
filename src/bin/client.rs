@@ -216,19 +216,43 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     }
                     ClientEvent::Icon {
                         typ,
-                        data,
-                    } => match typ {
-                        IconType::Normal => {
-                            *ni.icon.lock().unwrap() = Some(data);
-                            c.channel().send((server::item::StatusNotifierItemNewIcon {}).to_emit_message(&dbus::Path::new(format!("/{}/StatusNotifierItem", item.id)).unwrap())).unwrap();
+                        mut data,
+                    } => {
+                        for item in &mut data {
+                            let mut set_pixel = |x: u32, y: u32| {
+                                let base = ((y * item.width + x) * 4) as usize;
+                                item.data[base] = 0;
+                                item.data[base + 1] = 255;
+                            };
+
+                            for x in 0..2 {
+                                for y in 0..item.height {
+                                    set_pixel(x, y);
+                                    set_pixel(item.width - 1 - x, y);
+                                }
+                            }
+
+                            for y in 0..2 {
+                                for x in 0..item.width {
+                                    set_pixel(x, y);
+                                    set_pixel(x, item.height - 1 - y);
+                                }
+                            }
                         }
-                        IconType::Attention => {
-                            *ni.attention_icon.lock().unwrap() = Some(data);
-                            c.channel().send((server::item::StatusNotifierItemNewAttentionIcon {}).to_emit_message(&dbus::Path::new(format!("/{}/StatusNotifierItem", item.id)).unwrap())).unwrap();
-                        }
-                        IconType::Overlay => {
-                            *ni.overlay_icon.lock().unwrap() = Some(data);
-                            c.channel().send((server::item::StatusNotifierItemNewOverlayIcon {}).to_emit_message(&dbus::Path::new(format!("/{}/StatusNotifierItem", item.id)).unwrap())).unwrap();
+
+                        match typ {
+                            IconType::Normal => {
+                                *ni.icon.lock().unwrap() = Some(data);
+                                c.channel().send((server::item::StatusNotifierItemNewIcon {}).to_emit_message(&dbus::Path::new(format!("/{}/StatusNotifierItem", item.id)).unwrap())).unwrap();
+                            }
+                            IconType::Attention => {
+                                *ni.attention_icon.lock().unwrap() = Some(data);
+                                c.channel().send((server::item::StatusNotifierItemNewAttentionIcon {}).to_emit_message(&dbus::Path::new(format!("/{}/StatusNotifierItem", item.id)).unwrap())).unwrap();
+                            }
+                            IconType::Overlay => {
+                                *ni.overlay_icon.lock().unwrap() = Some(data);
+                                c.channel().send((server::item::StatusNotifierItemNewOverlayIcon {}).to_emit_message(&dbus::Path::new(format!("/{}/StatusNotifierItem", item.id)).unwrap())).unwrap();
+                            }
                         }
                     },
                     ClientEvent::RemoveIcon(typ) => match typ {
