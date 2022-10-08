@@ -27,14 +27,14 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode)]
 pub enum IconType {
     Normal,
     Overlay,
     Attention,
 }
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode)]
 pub enum ClientEvent {
     Create {
         category: String,
@@ -60,7 +60,7 @@ pub enum ClientEvent {
     RemoveTooltip,
 }
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode)]
 pub enum ServerEvent {
     Activate,
     ContextMenu,
@@ -68,26 +68,26 @@ pub enum ServerEvent {
     Scroll { delta: i32, orientation: String },
 }
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode)]
 pub struct IconClientEvent {
     pub id: String,
     pub event: ClientEvent,
 }
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode)]
 pub struct IconServerEvent {
     pub id: String,
     pub event: ServerEvent,
 }
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode)]
 pub struct IconData {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
 }
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode)]
 pub struct Tooltip {
     pub title: String,
     pub description: String,

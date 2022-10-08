@@ -301,6 +301,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         let item = bincode::decode_from_std_read(&mut stdin, bincode::config::standard())?;
+        eprintln!("->client {:?}", item);
         client_sender.send(item).unwrap();
     }
 }

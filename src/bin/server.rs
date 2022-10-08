@@ -20,6 +20,7 @@ fn reader(name_map: Arc<Mutex<HashMap<String, String>>>) {
     let c = Connection::new_session().unwrap();
     loop {
         let item: sni_icon::IconServerEvent = bincode::decode_from_std_read(&mut stdin, bincode::config::standard()).unwrap();
+        eprintln!("->server {:?}", item);
         if let Some(pathname) = name_map.lock().unwrap().get(&item.id) {
             let iindex = pathname.find('/').unwrap();
             let icon = c.with_proxy(
