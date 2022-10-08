@@ -1,0 +1,15 @@
+#!/usr/bin/env nix-shell
+#!nix-shell -p execline -i execlineb
+
+piperw 3 4
+piperw 5 6
+
+background {
+  fdmove 0 5
+  fdmove 1 4
+  ./target/debug/client
+}
+
+fdmove 0 3
+fdmove 1 6
+./target/debug/server
