@@ -1,3 +1,4 @@
+use std::io::Write;
 use dbus::blocking::{Connection, SyncConnection};
 use dbus::channel::MatchingReceiver;
 use dbus::message::{MatchRule, SignalArgs};
@@ -36,6 +37,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
             id: self.0.id.clone(),
             event: ServerEvent::ContextMenu,
         }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
+        std::io::stdout().lock().flush().unwrap();
         Ok(())
     }
     fn activate(&mut self, x_: i32, y_: i32) -> Result<(), dbus::MethodErr> {
@@ -43,6 +45,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
             id: self.0.id.clone(),
             event: ServerEvent::Activate,
         }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
+        std::io::stdout().lock().flush().unwrap();
         Ok(())
     }
     fn secondary_activate(&mut self, x_: i32, y_: i32) -> Result<(), dbus::MethodErr> {
@@ -50,6 +53,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
             id: self.0.id.clone(),
             event: ServerEvent::SecondaryActivate,
         }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
+        std::io::stdout().lock().flush().unwrap();
         Ok(())
     }
     fn scroll(&mut self, delta: i32, orientation: String) -> Result<(), dbus::MethodErr> {
@@ -57,6 +61,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
             id: self.0.id.clone(),
             event: ServerEvent::Scroll { delta, orientation },
         }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
+        std::io::stdout().lock().flush().unwrap();
         Ok(())
     }
     fn category(&self) -> Result<String, dbus::MethodErr> {

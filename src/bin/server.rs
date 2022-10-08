@@ -1,3 +1,4 @@
+use std::io::Write;
 use dbus::blocking::{Connection, SyncConnection};
 use dbus::channel::MatchingReceiver;
 use dbus::message::{MatchRule, SignalArgs};
@@ -68,6 +69,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     id: nm.clone(),
                     event: ClientEvent::Title(icon.title().ok()),
                 }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
+
+                std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -98,6 +101,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         event: ClientEvent::RemoveIcon(IconType::Normal),
                     }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
                 }
+
+                std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -128,6 +133,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         event: ClientEvent::RemoveIcon(IconType::Attention),
                     }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
                 }
+
+                std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -158,6 +165,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         event: ClientEvent::RemoveIcon(IconType::Overlay),
                     }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
                 }
+
+                std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -179,6 +188,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         id: nm.clone(),
                         event: ClientEvent::Status(icon.status().ok()),
                     }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
+
+                    std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -226,6 +237,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }, &mut std::io::stdout().lock(), bincode::config::standard()).unwrap();
             }
         }
+
+        std::io::stdout().lock().flush()?;
     }
 
     loop {
