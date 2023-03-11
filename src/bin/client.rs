@@ -228,6 +228,8 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                 let base = ((y * item.width + x) * 4) as usize;
                                 item.data[base] = 0;
                                 item.data[base + 1] = 255;
+                                item.data[base + 2] = 0;
+                                item.data[base + 3] = 0;
                             };
 
                             for x in 0..2 {
