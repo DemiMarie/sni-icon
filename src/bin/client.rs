@@ -201,7 +201,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     NotifierIconWrapper(notifier),
                 );
                 watcher
-                    .register_status_notifier_item(&format!("{}/{}", c.unique_name(), item.id))
+                    .register_status_notifier_item(&format!("/{}/StatusNotifierItem", item.id))
                     .unwrap();
             } else {
                 let watcher = c.with_proxy(
