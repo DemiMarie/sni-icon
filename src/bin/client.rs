@@ -226,7 +226,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                         for item in &mut data {
                             let mut set_pixel = |x: u32, y: u32| {
                                 let base = ((y * item.width + x) * 4) as usize;
-                                item.data[base] = 0;
+                                item.data[base] = 255;
                                 item.data[base + 1] = 255;
                                 item.data[base + 2] = 0;
                                 item.data[base + 3] = 0;
