@@ -1,6 +1,7 @@
 use dbus::blocking::{Connection, SyncConnection};
 
 use dbus::message::SignalArgs;
+use dbus::Message;
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -13,6 +14,13 @@ use sni_icon::*;
 
 use std::sync::Arc;
 use std::sync::Mutex;
+
+fn send_or_panic<T: bincode::Encode>(s: T) {
+    let mut out = std::io::stdout().lock();
+    bincode::encode_into_std_write(s, &mut out, bincode::config::standard())
+        .expect("Cannot write to stdout");
+    out.flush().expect("Cannot flush stdout");
+}
 
 fn reader(name_map: Arc<Mutex<HashMap<String, String>>>) {
     let mut stdin = std::io::stdin().lock();
@@ -30,11 +38,21 @@ fn reader(name_map: Arc<Mutex<HashMap<String, String>>>) {
             );
 
             match item.event {
-                ServerEvent::Activate => icon.activate(0, 0).unwrap(),
-                ServerEvent::SecondaryActivate => icon.secondary_activate(0, 0).unwrap(),
-                ServerEvent::ContextMenu => icon.context_menu(0, 0).unwrap(),
+                ServerEvent::Activate => icon.activate(0, 0).unwrap_or_else(|e| {
+                    eprintln!("->server error {:?}", e);
+                }),
+                ServerEvent::SecondaryActivate => {
+                    icon.secondary_activate(0, 0).unwrap_or_else(|e| {
+                        eprintln!("->server error {:?}", e);
+                    })
+                }
+                ServerEvent::ContextMenu => icon.context_menu(0, 0).unwrap_or_else(|e| {
+                    eprintln!("->server error {:?}", e);
+                }),
                 ServerEvent::Scroll { delta, orientation } => {
-                    icon.scroll(delta, &orientation).unwrap()
+                    icon.scroll(delta, &orientation).unwrap_or_else(|e| {
+                        eprintln!("->server error {:?}", e);
+                    })
                 }
             }
         }
@@ -68,17 +86,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             let nm = name_map_.lock().unwrap();
             if let Some(nm) = nm.get(&fullpath) {
-                bincode::encode_into_std_write(
-                    IconClientEvent {
-                        id: nm.clone(),
-                        event: ClientEvent::Title(icon.title().ok()),
-                    },
-                    &mut std::io::stdout().lock(),
-                    bincode::config::standard(),
-                )
-                .unwrap();
-
-                std::io::stdout().lock().flush().unwrap();
+                send_or_panic(IconClientEvent {
+                    id: nm.clone(),
+                    event: ClientEvent::Title(icon.title().ok()),
+                })
             }
             true
         },
@@ -259,74 +270,100 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     )?;
 
-    for item in watcher.registered_status_notifier_items()? {
-        let item_id = format!("Item{}", index);
-        index += 1;
-        name_map
-            .lock()
-            .unwrap()
-            .insert(item.clone(), item_id.clone());
-        reverse_name_map
-            .lock()
-            .unwrap()
-            .insert(item_id.clone(), item.clone());
-        let iindex = item.find('/').unwrap();
-        let icon = c.with_proxy(
-            &item[..iindex],
-            &item[iindex..],
-            Duration::from_millis(1000),
-        );
-
-        bincode::encode_into_std_write(
-            IconClientEvent {
-                id: item_id.clone(),
-                event: ClientEvent::Create {
-                    category: icon.category()?,
-                },
-            },
-            &mut std::io::stdout().lock(),
-            bincode::config::standard(),
-        )?;
-
-        bincode::encode_into_std_write(
-            IconClientEvent {
-                id: item_id.clone(),
-                event: ClientEvent::Status(icon.status().ok()),
-            },
-            &mut std::io::stdout().lock(),
-            bincode::config::standard(),
-        )?;
-
-        for (ty, fun) in [
-            (IconType::Normal, icon.icon_pixmap()),
-            (IconType::Attention, icon.attention_icon_pixmap()),
-            (IconType::Overlay, icon.overlay_icon_pixmap()),
-        ] {
-            if let Ok(icon_pixmap) = fun {
-                bincode::encode_into_std_write(
-                    IconClientEvent {
-                        id: item_id.clone(),
-                        event: ClientEvent::Icon {
-                            typ: ty,
-                            data: icon_pixmap
-                                .into_iter()
-                                .map(|(w, h, data)| IconData {
-                                    width: w as u32,
-                                    height: h as u32,
-                                    data: data,
-                                })
-                                .collect(),
-                        },
-                    },
-                    &mut std::io::stdout().lock(),
-                    bincode::config::standard(),
-                )
-                .unwrap();
+    let mut go =
+        move |item: String, c: &SyncConnection| -> Result<(), Box<dyn std::error::Error>> {
+            match item.find('/') {
+                None => return Ok(()), // invalid name
+                Some(position) => {
+                    if item[position..].starts_with("/QubesIcon/") {
+                        eprintln!("Loop detected!");
+                        return Ok(());
+                    }
+                }
             }
-        }
+            eprintln!("Got new object {:?}", &item);
+            let item_id = format!("Item{}", index);
+            index += 1;
+            name_map
+                .lock()
+                .expect("poisoned?")
+                .insert(item.clone(), item_id.clone());
+            reverse_name_map
+                .lock()
+                .unwrap()
+                .insert(item_id.clone(), item.clone());
+            let iindex = item.find('/').unwrap();
+            let icon = c.with_proxy(
+                &item[..iindex],
+                &item[iindex..],
+                Duration::from_millis(1000),
+            );
 
-        std::io::stdout().lock().flush()?;
+            bincode::encode_into_std_write(
+                IconClientEvent {
+                    id: item_id.clone(),
+                    event: ClientEvent::Create {
+                        category: icon.category()?,
+                    },
+                },
+                &mut std::io::stdout().lock(),
+                bincode::config::standard(),
+            )?;
+
+            bincode::encode_into_std_write(
+                IconClientEvent {
+                    id: item_id.clone(),
+                    event: ClientEvent::Status(icon.status().ok()),
+                },
+                &mut std::io::stdout().lock(),
+                bincode::config::standard(),
+            )?;
+
+            for (ty, fun) in [
+                (IconType::Normal, icon.icon_pixmap()),
+                (IconType::Attention, icon.attention_icon_pixmap()),
+                (IconType::Overlay, icon.overlay_icon_pixmap()),
+            ] {
+                if let Ok(icon_pixmap) = fun {
+                    bincode::encode_into_std_write(
+                        IconClientEvent {
+                            id: item_id.clone(),
+                            event: ClientEvent::Icon {
+                                typ: ty,
+                                data: icon_pixmap
+                                    .into_iter()
+                                    .map(|(w, h, data)| IconData {
+                                        width: w as u32,
+                                        height: h as u32,
+                                        data: data,
+                                    })
+                                    .collect(),
+                            },
+                        },
+                        &mut std::io::stdout().lock(),
+                        bincode::config::standard(),
+                    )?;
+                }
+            }
+
+            std::io::stdout().lock().flush()?;
+            Ok::<(), _>(())
+        };
+
+    for item in watcher.registered_status_notifier_items()? {
+        go(item, &c)?
     }
+
+    let handle_notifier =
+        move |arg: client::watcher::StatusNotifierWatcherStatusNotifierItemRegistered,
+              c: &SyncConnection,
+              _msg: &Message|
+              -> bool {
+            go(arg.arg0, c).expect("NYI handling the error");
+            true
+        };
+
+    watcher.match_signal(handle_notifier)?;
 
     loop {
         c.process(Duration::from_millis(1000))?;

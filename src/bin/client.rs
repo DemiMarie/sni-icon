@@ -194,10 +194,12 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     _ => panic!("Bad ID"),
                 }
             }
+            let name = format!("/QubesIcon/{}/StatusNotifierItem", &item.id);
             if let ClientEvent::Create { category } = &item.event {
                 if items.contains_key(&item.id) {
                     panic!("Item ID exists already");
                 }
+                eprintln!("Registering new item {}", &name);
 
                 let notifier = Arc::new(NotifierIcon {
                     id: item.id.clone(),
@@ -211,17 +213,15 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     overlay_icon: Mutex::new(None),
                 });
 
-                items.insert(item.id.clone(), notifier.clone());
-
+                items.insert(item.id, notifier.clone());
                 cr.lock().unwrap().insert(
-                    format!("/{}/StatusNotifierItem", item.id),
+                    name.clone(),
                     &[iface_token],
                     NotifierIconWrapper(notifier),
                 );
-                watcher
-                    .register_status_notifier_item(&format!("/{}/StatusNotifierItem", item.id))
-                    .unwrap();
+                watcher.register_status_notifier_item(&name).unwrap();
             } else {
+                let path = dbus::Path::new(name).expect("validated above");
                 let _watcher = c.with_proxy(
                     "org.kde.StatusNotifierWatcher",
                     "/StatusNotifierWatcher",
@@ -268,13 +268,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewIcon {})
-                                            .to_emit_message(
-                                                &dbus::Path::new(format!(
-                                                    "/{}/StatusNotifierItem",
-                                                    item.id
-                                                ))
-                                                .unwrap(),
-                                            ),
+                                            .to_emit_message(&path),
                                     )
                                     .unwrap();
                             }
@@ -283,13 +277,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewAttentionIcon {})
-                                            .to_emit_message(
-                                                &dbus::Path::new(format!(
-                                                    "/{}/StatusNotifierItem",
-                                                    item.id
-                                                ))
-                                                .unwrap(),
-                                            ),
+                                            .to_emit_message(&path),
                                     )
                                     .unwrap();
                             }
@@ -298,13 +286,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewOverlayIcon {})
-                                            .to_emit_message(
-                                                &dbus::Path::new(format!(
-                                                    "/{}/StatusNotifierItem",
-                                                    item.id
-                                                ))
-                                                .unwrap(),
-                                            ),
+                                            .to_emit_message(&path),
                                     )
                                     .unwrap();
                             }
@@ -331,9 +313,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     }
 
                     ClientEvent::Destroy => {
-                        cr.lock().unwrap().remove::<Arc<NotifierIcon>>(
-                            &dbus::Path::new(format!("/{}/StatusNotifierItem", item.id)).unwrap(),
-                        );
+                        cr.lock().unwrap().remove::<Arc<NotifierIcon>>(&path);
                         items.remove(&item.id);
                     }
                 }
