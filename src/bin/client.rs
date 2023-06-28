@@ -188,6 +188,12 @@ fn client_server(r: Receiver<IconClientEvent>) {
     loop {
         c.process(Duration::from_millis(100)).unwrap();
         while let Some(item) = r.recv_timeout(Duration::from_millis(100)).ok() {
+            for i in item.id.as_bytes() {
+                match i {
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' => {}
+                    _ => panic!("Bad ID"),
+                }
+            }
             if let ClientEvent::Create { category } = &item.event {
                 if items.contains_key(&item.id) {
                     panic!("Item ID exists already");
