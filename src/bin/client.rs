@@ -31,57 +31,40 @@ struct NotifierIcon {
 
 struct NotifierIconWrapper(Arc<NotifierIcon>);
 
+fn send_or_panic<T: bincode::Encode>(s: T) {
+    let mut out = std::io::stdout().lock();
+    bincode::encode_into_std_write(s, &mut out, bincode::config::standard())
+        .expect("Cannot write to stdout");
+    out.flush().expect("Cannot flush stdout");
+}
+
 impl server::item::StatusNotifierItem for NotifierIconWrapper {
     fn context_menu(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
-        bincode::encode_into_std_write(
-            IconServerEvent {
-                id: self.0.id.clone(),
-                event: ServerEvent::ContextMenu,
-            },
-            &mut std::io::stdout().lock(),
-            bincode::config::standard(),
-        )
-        .unwrap();
-        std::io::stdout().lock().flush().unwrap();
+        send_or_panic(IconServerEvent {
+            id: self.0.id.clone(),
+            event: ServerEvent::ContextMenu,
+        });
         Ok(())
     }
     fn activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
-        bincode::encode_into_std_write(
-            IconServerEvent {
-                id: self.0.id.clone(),
-                event: ServerEvent::Activate,
-            },
-            &mut std::io::stdout().lock(),
-            bincode::config::standard(),
-        )
-        .unwrap();
-        std::io::stdout().lock().flush().unwrap();
+        send_or_panic(IconServerEvent {
+            id: self.0.id.clone(),
+            event: ServerEvent::Activate,
+        });
         Ok(())
     }
     fn secondary_activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
-        bincode::encode_into_std_write(
-            IconServerEvent {
-                id: self.0.id.clone(),
-                event: ServerEvent::SecondaryActivate,
-            },
-            &mut std::io::stdout().lock(),
-            bincode::config::standard(),
-        )
-        .unwrap();
-        std::io::stdout().lock().flush().unwrap();
+        send_or_panic(IconServerEvent {
+            id: self.0.id.clone(),
+            event: ServerEvent::SecondaryActivate,
+        });
         Ok(())
     }
     fn scroll(&mut self, delta: i32, orientation: String) -> Result<(), dbus::MethodErr> {
-        bincode::encode_into_std_write(
-            IconServerEvent {
-                id: self.0.id.clone(),
-                event: ServerEvent::Scroll { delta, orientation },
-            },
-            &mut std::io::stdout().lock(),
-            bincode::config::standard(),
-        )
-        .unwrap();
-        std::io::stdout().lock().flush().unwrap();
+        send_or_panic(IconServerEvent {
+            id: self.0.id.clone(),
+            event: ServerEvent::Scroll { delta, orientation },
+        });
         Ok(())
     }
     fn category(&self) -> Result<String, dbus::MethodErr> {
