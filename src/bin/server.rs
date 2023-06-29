@@ -22,7 +22,7 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
     out.flush().expect("Cannot flush stdout");
 }
 
-fn reader(name_map: Arc<Mutex<HashMap<String, String>>>) {
+fn reader(name_map: Arc<Mutex<HashMap<u64, String>>>) {
     let mut stdin = std::io::stdin().lock();
     let c = Connection::new_session().unwrap();
     loop {
@@ -68,8 +68,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "/StatusNotifierWatcher",
         Duration::from_millis(1000),
     );
-    let name_map = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-    let reverse_name_map = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+    let name_map = Arc::new(Mutex::new(HashMap::<String, u64>::new()));
+    let reverse_name_map = Arc::new(Mutex::new(HashMap::<u64, String>::new()));
     let reverse_name_map_ = reverse_name_map.clone();
     std::thread::spawn(move || reader(reverse_name_map_));
 
@@ -85,9 +85,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Duration::from_millis(1000),
             );
             let nm = name_map_.lock().unwrap();
-            if let Some(nm) = nm.get(&fullpath) {
+            if let Some(&id) = nm.get(&fullpath) {
                 send_or_panic(IconClientEvent {
-                    id: nm.clone(),
+                    id,
                     event: ClientEvent::Title(icon.title().ok()),
                 })
             }
@@ -282,16 +282,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             eprintln!("Got new object {:?}", &item);
-            let item_id = format!("Item{}", index);
             index += 1;
             name_map
                 .lock()
                 .expect("poisoned?")
-                .insert(item.clone(), item_id.clone());
-            reverse_name_map
-                .lock()
-                .unwrap()
-                .insert(item_id.clone(), item.clone());
+                .insert(item.clone(), index);
+            reverse_name_map.lock().unwrap().insert(index, item.clone());
             let iindex = item.find('/').unwrap();
             let icon = c.with_proxy(
                 &item[..iindex],
@@ -301,7 +297,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             bincode::encode_into_std_write(
                 IconClientEvent {
-                    id: item_id.clone(),
+                    id: index,
                     event: ClientEvent::Create {
                         category: icon.category()?,
                     },
@@ -312,7 +308,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             bincode::encode_into_std_write(
                 IconClientEvent {
-                    id: item_id.clone(),
+                    id: index,
                     event: ClientEvent::Status(icon.status().ok()),
                 },
                 &mut std::io::stdout().lock(),
@@ -327,7 +323,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if let Ok(icon_pixmap) = fun {
                     bincode::encode_into_std_write(
                         IconClientEvent {
-                            id: item_id.clone(),
+                            id: index,
                             event: ClientEvent::Icon {
                                 typ: ty,
                                 data: icon_pixmap

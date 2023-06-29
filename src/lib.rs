@@ -48,13 +48,13 @@ pub enum ServerEvent {
 
 #[derive(Debug, bincode::Decode, bincode::Encode)]
 pub struct IconClientEvent {
-    pub id: String,
+    pub id: u64,
     pub event: ClientEvent,
 }
 
 #[derive(Debug, bincode::Decode, bincode::Encode)]
 pub struct IconServerEvent {
-    pub id: String,
+    pub id: u64,
     pub event: ServerEvent,
 }
 

@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use sni_icon::*;
 
 struct NotifierIcon {
-    pub id: String,
+    pub id: u64,
     pub category: String,
 
     pub tooltip: Mutex<Option<Tooltip>>,
@@ -41,28 +41,28 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
 impl server::item::StatusNotifierItem for NotifierIconWrapper {
     fn context_menu(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
         send_or_panic(IconServerEvent {
-            id: self.0.id.clone(),
+            id: self.0.id,
             event: ServerEvent::ContextMenu,
         });
         Ok(())
     }
     fn activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
         send_or_panic(IconServerEvent {
-            id: self.0.id.clone(),
+            id: self.0.id,
             event: ServerEvent::Activate,
         });
         Ok(())
     }
     fn secondary_activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
         send_or_panic(IconServerEvent {
-            id: self.0.id.clone(),
+            id: self.0.id,
             event: ServerEvent::SecondaryActivate,
         });
         Ok(())
     }
     fn scroll(&mut self, delta: i32, orientation: String) -> Result<(), dbus::MethodErr> {
         send_or_panic(IconServerEvent {
-            id: self.0.id.clone(),
+            id: self.0.id,
             event: ServerEvent::Scroll { delta, orientation },
         });
         Ok(())
@@ -71,13 +71,13 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         Ok(self.0.category.clone())
     }
     fn id(&self) -> Result<String, dbus::MethodErr> {
-        Ok(self.0.id.clone())
+        Err(dbus::MethodErr::no_property("Id"))
     }
     fn title(&self) -> Result<String, dbus::MethodErr> {
         let title = self.0.title.lock().unwrap();
         title
             .clone()
-            .ok_or_else(|| dbus::MethodErr::no_property("title"))
+            .ok_or_else(|| dbus::MethodErr::no_property("Title"))
     }
     fn status(&self) -> Result<String, dbus::MethodErr> {
         let status = self.0.status.lock().unwrap();
@@ -165,7 +165,8 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
 }
 
 fn client_server(r: Receiver<IconClientEvent>) {
-    let mut items: HashMap<String, Arc<NotifierIcon>> = HashMap::new();
+    let mut items: HashMap<u64, Arc<NotifierIcon>> = HashMap::new();
+    let mut last_index = 0u64;
     let c = Arc::new(SyncConnection::new_session().unwrap());
     let cr = Arc::new(Mutex::new(Crossroads::new()));
     let iface_token =
@@ -188,17 +189,12 @@ fn client_server(r: Receiver<IconClientEvent>) {
     loop {
         c.process(Duration::from_millis(100)).unwrap();
         while let Some(item) = r.recv_timeout(Duration::from_millis(100)).ok() {
-            for i in item.id.as_bytes() {
-                match i {
-                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' => {}
-                    _ => panic!("Bad ID"),
-                }
-            }
-            let name = format!("/QubesIcon/{}/StatusNotifierItem", &item.id);
+            let name = format!("/QubesIcon/{}/StatusNotifierItem", item.id);
             if let ClientEvent::Create { category } = &item.event {
-                if items.contains_key(&item.id) {
-                    panic!("Item ID exists already");
+                if item.id <= last_index {
+                    panic!("Item ID not monotonically increasing");
                 }
+                last_index = item.id;
                 eprintln!("Registering new item {}", &name);
 
                 let notifier = Arc::new(NotifierIcon {
