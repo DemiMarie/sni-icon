@@ -1,6 +1,6 @@
-use dbus::blocking::{Connection, SyncConnection};
+use dbus::blocking::SyncConnection;
 use dbus::channel::MatchingReceiver;
-use dbus::message::{MatchRule, SignalArgs};
+use dbus::message::SignalArgs;
 use dbus_crossroads::Crossroads;
 use std::collections::HashMap;
 use std::error::Error;
@@ -10,7 +10,7 @@ use std::time::Duration;
 use sni_icon::client::item::StatusNotifierItem;
 use sni_icon::client::watcher::StatusNotifierWatcher;
 
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -32,7 +32,7 @@ struct NotifierIcon {
 struct NotifierIconWrapper(Arc<NotifierIcon>);
 
 impl server::item::StatusNotifierItem for NotifierIconWrapper {
-    fn context_menu(&mut self, x_: i32, y_: i32) -> Result<(), dbus::MethodErr> {
+    fn context_menu(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
         bincode::encode_into_std_write(
             IconServerEvent {
                 id: self.0.id.clone(),
@@ -45,7 +45,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         std::io::stdout().lock().flush().unwrap();
         Ok(())
     }
-    fn activate(&mut self, x_: i32, y_: i32) -> Result<(), dbus::MethodErr> {
+    fn activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
         bincode::encode_into_std_write(
             IconServerEvent {
                 id: self.0.id.clone(),
@@ -58,7 +58,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         std::io::stdout().lock().flush().unwrap();
         Ok(())
     }
-    fn secondary_activate(&mut self, x_: i32, y_: i32) -> Result<(), dbus::MethodErr> {
+    fn secondary_activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
         bincode::encode_into_std_write(
             IconServerEvent {
                 id: self.0.id.clone(),
@@ -233,7 +233,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     .register_status_notifier_item(&format!("/{}/StatusNotifierItem", item.id))
                     .unwrap();
             } else {
-                let watcher = c.with_proxy(
+                let _watcher = c.with_proxy(
                     "org.kde.StatusNotifierWatcher",
                     "/StatusNotifierWatcher",
                     Duration::from_millis(1000),

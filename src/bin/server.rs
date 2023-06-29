@@ -1,7 +1,7 @@
 use dbus::blocking::{Connection, SyncConnection};
-use dbus::channel::MatchingReceiver;
-use dbus::message::{MatchRule, SignalArgs};
-use dbus_crossroads::Crossroads;
+
+use dbus::message::SignalArgs;
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::Write;
@@ -11,7 +11,6 @@ use sni_icon::client::item::StatusNotifierItem;
 use sni_icon::client::watcher::StatusNotifierWatcher;
 use sni_icon::*;
 
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
 

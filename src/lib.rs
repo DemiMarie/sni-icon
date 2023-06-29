@@ -1,20 +1,9 @@
 pub mod client;
 pub mod server;
 
-use dbus::blocking::{Connection, SyncConnection};
-use dbus::channel::MatchingReceiver;
-use dbus::message::{MatchRule, SignalArgs};
-use dbus_crossroads::Crossroads;
-use std::collections::HashMap;
 use std::error::Error;
-use std::time::Duration;
 
 use client::item::StatusNotifierItem;
-use client::watcher::StatusNotifierWatcher;
-
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
-use std::sync::Mutex;
 
 #[derive(Debug, bincode::Decode, bincode::Encode)]
 pub enum IconType {
