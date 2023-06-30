@@ -59,15 +59,44 @@ fn reader(name_map: Arc<Mutex<HashMap<u64, String>>>) {
     }
 }
 
+#[derive(Debug)]
+pub struct NameOwnerChanged {
+    pub name: String,
+    pub old_owner: String,
+    pub new_owner: String,
+}
+
+impl dbus::arg::ReadAll for NameOwnerChanged {
+    fn read(i: &mut dbus::arg::Iter) -> Result<Self, dbus::arg::TypeMismatchError> {
+        Ok(Self {
+            name: i.read()?,
+            old_owner: i.read()?,
+            new_owner: i.read()?,
+        })
+    }
+}
+
+impl dbus::message::SignalArgs for NameOwnerChanged {
+    const NAME: &'static str = "NameOwnerChanged";
+    const INTERFACE: &'static str = "org.freedesktop.DBus";
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     // Let's start by starting up a connection to the session bus and request a name.
     let c = SyncConnection::new_session()?;
+
+    let bus_watcher = c.with_proxy(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        Duration::from_millis(1000),
+    );
 
     let watcher = c.with_proxy(
         "org.kde.StatusNotifierWatcher",
         "/StatusNotifierWatcher",
         Duration::from_millis(1000),
     );
+
     let name_map = Arc::new(Mutex::new(HashMap::<String, u64>::new()));
     let reverse_name_map = Arc::new(Mutex::new(HashMap::<u64, String>::new()));
     let reverse_name_map_ = reverse_name_map.clone();
@@ -270,45 +299,46 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     )?;
 
+    let name_map_ = name_map.clone();
+    let reverse_name_map_ = reverse_name_map.clone();
     let mut go =
         move |item: String, c: &SyncConnection| -> Result<(), Box<dyn std::error::Error>> {
-            match item.find('/') {
+            eprintln!("Going!");
+            let iindex = match item.find('/') {
                 None => return Ok(()), // invalid name
-                Some(position) => {
-                    if item[position..].starts_with("/QubesIcon/") {
-                        eprintln!("Loop detected!");
-                        return Ok(());
-                    }
-                }
-            }
-            eprintln!("Got new object {:?}", &item);
+                Some(position) => position,
+            };
+            let bus_name = &item[..iindex];
+            let object_path = &item[iindex..];
             index += 1;
-            name_map
-                .lock()
-                .expect("poisoned?")
-                .insert(item.clone(), index);
-            reverse_name_map.lock().unwrap().insert(index, item.clone());
-            let iindex = item.find('/').unwrap();
-            let icon = c.with_proxy(
-                &item[..iindex],
-                &item[iindex..],
-                Duration::from_millis(1000),
-            );
+            let id = index;
+            eprintln!("Got new object {:?}, id {}", &item, id);
+            let icon = c.with_proxy(bus_name, object_path, Duration::from_millis(1000));
 
             bincode::encode_into_std_write(
                 IconClientEvent {
-                    id: index,
+                    id,
                     event: ClientEvent::Create {
                         category: icon.category()?,
                     },
                 },
                 &mut std::io::stdout().lock(),
                 bincode::config::standard(),
-            )?;
+            )
+            .expect("error writing to stdout");
+            name_map_
+                .lock()
+                .expect("poisoned?")
+                .insert(bus_name.to_owned(), id);
+            reverse_name_map_
+                .lock()
+                .unwrap()
+                .insert(id, bus_name.to_owned());
+            eprintln!("Create event sent");
 
             bincode::encode_into_std_write(
                 IconClientEvent {
-                    id: index,
+                    id,
                     event: ClientEvent::Status(icon.status().ok()),
                 },
                 &mut std::io::stdout().lock(),
@@ -323,7 +353,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if let Ok(icon_pixmap) = fun {
                     bincode::encode_into_std_write(
                         IconClientEvent {
-                            id: index,
+                            id,
                             event: ClientEvent::Icon {
                                 typ: ty,
                                 data: icon_pixmap
@@ -338,11 +368,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                         },
                         &mut std::io::stdout().lock(),
                         bincode::config::standard(),
-                    )?;
+                    )
+                    .expect("cannot write to stdout");
                 }
             }
 
-            std::io::stdout().lock().flush()?;
+            std::io::stdout()
+                .lock()
+                .flush()
+                .expect("cannot write to stdout");
+            eprintln!("Returning from go()");
             Ok::<(), _>(())
         };
 
@@ -355,11 +390,52 @@ fn main() -> Result<(), Box<dyn Error>> {
               c: &SyncConnection,
               _msg: &Message|
               -> bool {
-            go(arg.arg0, c).expect("NYI handling the error");
+            eprintln!("Picked up registered event");
+            let _ = go(arg.arg0, c);
             true
         };
 
+    let handle_name_lost = move |NameOwnerChanged {
+                                     name,
+                                     old_owner,
+                                     new_owner,
+                                 },
+                                 c: &SyncConnection,
+                                 _msg: &Message|
+          -> bool {
+        if old_owner.is_empty() || !new_owner.is_empty() {
+            return true;
+        }
+        let id = match name_map.lock().expect("poisoned?").remove(&name) {
+            Some(i) => i,
+            None => return true,
+        };
+        eprintln!("Name {} lost, destroying icon {}", &name, id);
+        let r = reverse_name_map
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .expect("reverse and forward maps inconsistent");
+        assert_eq!(name, r, "reverse and forward maps inconsistent");
+        bincode::encode_into_std_write(
+            IconClientEvent {
+                id,
+                event: ClientEvent::Destroy,
+            },
+            &mut std::io::stdout().lock(),
+            bincode::config::standard(),
+        )
+        .expect("cannot write to stdout");
+        std::io::stdout()
+            .lock()
+            .flush()
+            .expect("cannot write to stdout");
+        true
+    };
+
     watcher.match_signal(handle_notifier)?;
+
+    bus_watcher.match_signal(handle_name_lost)?;
 
     loop {
         c.process(Duration::from_millis(1000))?;
