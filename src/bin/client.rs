@@ -44,24 +44,24 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
 }
 
 impl server::item::StatusNotifierItem for NotifierIconWrapper {
-    fn context_menu(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
+    fn context_menu(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
         send_or_panic(IconServerEvent {
             id: self.0.borrow().id,
-            event: ServerEvent::ContextMenu,
+            event: ServerEvent::ContextMenu { x, y },
         });
         Ok(())
     }
-    fn activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
+    fn activate(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
         send_or_panic(IconServerEvent {
             id: self.0.borrow().id,
-            event: ServerEvent::Activate,
+            event: ServerEvent::Activate { x, y },
         });
         Ok(())
     }
-    fn secondary_activate(&mut self, _x_: i32, _y_: i32) -> Result<(), dbus::MethodErr> {
+    fn secondary_activate(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
         send_or_panic(IconServerEvent {
             id: self.0.borrow().id,
-            event: ServerEvent::SecondaryActivate,
+            event: ServerEvent::SecondaryActivate { x, y },
         });
         Ok(())
     }

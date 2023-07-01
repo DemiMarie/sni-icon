@@ -40,9 +40,9 @@ pub enum ClientEvent {
 
 #[derive(Debug, bincode::Decode, bincode::Encode)]
 pub enum ServerEvent {
-    Activate,
-    ContextMenu,
-    SecondaryActivate,
+    Activate { x: i32, y: i32 },
+    ContextMenu { x: i32, y: i32 },
+    SecondaryActivate { x: i32, y: i32 },
     Scroll { delta: i32, orientation: String },
 }
 

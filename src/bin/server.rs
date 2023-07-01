@@ -38,15 +38,15 @@ fn reader(name_map: Arc<Mutex<HashMap<u64, String>>>) {
             );
 
             match item.event {
-                ServerEvent::Activate => icon.activate(0, 0).unwrap_or_else(|e| {
+                ServerEvent::Activate { x, y } => icon.activate(x, y).unwrap_or_else(|e| {
                     eprintln!("->server error {:?}", e);
                 }),
-                ServerEvent::SecondaryActivate => {
-                    icon.secondary_activate(0, 0).unwrap_or_else(|e| {
+                ServerEvent::SecondaryActivate { x, y } => {
+                    icon.secondary_activate(x, y).unwrap_or_else(|e| {
                         eprintln!("->server error {:?}", e);
                     })
                 }
-                ServerEvent::ContextMenu => icon.context_menu(0, 0).unwrap_or_else(|e| {
+                ServerEvent::ContextMenu { x, y } => icon.context_menu(x, y).unwrap_or_else(|e| {
                     eprintln!("->server error {:?}", e);
                 }),
                 ServerEvent::Scroll { delta, orientation } => {
