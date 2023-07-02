@@ -9,7 +9,6 @@ use std::error::Error;
 use std::io::Write;
 use std::time::Duration;
 
-use sni_icon::client::item::StatusNotifierItem;
 use sni_icon::client::watcher::StatusNotifierWatcher;
 
 use std::cell::RefCell;
@@ -31,10 +30,7 @@ struct NotifierIcon {
     overlay_icon: Option<Vec<IconData>>,
 }
 
-struct NotifierIconWrapper(Rc<RefCell<NotifierIcon>>);
-// This is a total lie, but we get away with it because the code is essentially single-threaded.
-// It must be fixed before shipping the code in production.
-unsafe impl Send for NotifierIconWrapper {}
+struct NotifierIconWrapper;
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
@@ -43,54 +39,80 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
     out.flush().expect("Cannot flush stdout");
 }
 
+fn call_with_icon<T, U: FnOnce(&mut NotifierIcon) -> Result<T, dbus::MethodErr>>(
+    cb: U,
+) -> Result<T, dbus::MethodErr> {
+    WRAPPER.with(|items| {
+        let mut items = items.borrow_mut();
+        match ID.with(|id| items.get_mut(&id.get())) {
+            None => {
+                let err = unsafe {
+                    // SAFETY: the preconditions are held
+                    ErrorName::from_slice_unchecked("org.freedesktop.DBus.Error.ServiceUnknown\0")
+                };
+                Err((err, "Icon does not exist").into())
+            }
+            Some(icon) => cb(icon),
+        }
+    })
+}
+
 impl server::item::StatusNotifierItem for NotifierIconWrapper {
     fn context_menu(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
-        send_or_panic(IconServerEvent {
-            id: self.0.borrow().id,
-            event: ServerEvent::ContextMenu { x, y },
-        });
-        Ok(())
+        call_with_icon(|icon| {
+            send_or_panic(IconServerEvent {
+                id: icon.id,
+                event: ServerEvent::ContextMenu { x, y },
+            });
+            Ok(())
+        })
     }
     fn activate(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
-        send_or_panic(IconServerEvent {
-            id: self.0.borrow().id,
-            event: ServerEvent::Activate { x, y },
-        });
-        Ok(())
+        call_with_icon(|icon| {
+            send_or_panic(IconServerEvent {
+                id: icon.id,
+                event: ServerEvent::Activate { x, y },
+            });
+            Ok(())
+        })
     }
     fn secondary_activate(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
-        send_or_panic(IconServerEvent {
-            id: self.0.borrow().id,
-            event: ServerEvent::SecondaryActivate { x, y },
-        });
-        Ok(())
+        call_with_icon(|icon| {
+            send_or_panic(IconServerEvent {
+                id: icon.id,
+                event: ServerEvent::SecondaryActivate { x, y },
+            });
+            Ok(())
+        })
     }
     fn scroll(&mut self, delta: i32, orientation: String) -> Result<(), dbus::MethodErr> {
-        send_or_panic(IconServerEvent {
-            id: self.0.borrow().id,
-            event: ServerEvent::Scroll { delta, orientation },
-        });
-        Ok(())
+        call_with_icon(|icon| {
+            send_or_panic(IconServerEvent {
+                id: icon.id,
+                event: ServerEvent::Scroll { delta, orientation },
+            });
+            Ok(())
+        })
     }
     fn category(&self) -> Result<String, dbus::MethodErr> {
-        Ok(self.0.borrow().category.clone())
+        call_with_icon(|icon| Ok(icon.category.clone()))
     }
     fn id(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("Id"))
     }
     fn title(&self) -> Result<String, dbus::MethodErr> {
-        self.0
-            .borrow()
-            .title
-            .clone()
-            .ok_or_else(|| dbus::MethodErr::no_property("Title"))
+        call_with_icon(|icon| {
+            icon.title
+                .clone()
+                .ok_or_else(|| dbus::MethodErr::no_property("Title"))
+        })
     }
     fn status(&self) -> Result<String, dbus::MethodErr> {
-        self.0
-            .borrow()
-            .status
-            .clone()
-            .ok_or_else(|| dbus::MethodErr::no_property("status"))
+        call_with_icon(|icon| {
+            icon.status
+                .clone()
+                .ok_or_else(|| dbus::MethodErr::no_property("status"))
+        })
     }
     fn window_id(&self) -> Result<i32, dbus::MethodErr> {
         Ok(0)
@@ -108,47 +130,46 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         Err(dbus::MethodErr::no_property("IconName"))
     }
     fn icon_pixmap(&self) -> Result<Vec<(i32, i32, Vec<u8>)>, dbus::MethodErr> {
-        let icon = self.0.borrow();
-        let icon = icon
-            .icon
-            .as_ref()
-            .map(|f| f.as_slice())
-            .unwrap_or_else(|| &[]);
-        Ok(icon
-            .iter()
-            .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-            .collect())
+        call_with_icon(|icon| {
+            Ok(icon
+                .icon
+                .as_ref()
+                .map(|f| f.as_slice())
+                .unwrap_or_else(|| &[])
+                .iter()
+                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
+                .collect())
+        })
     }
     fn overlay_icon_name(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("OverlayIconName"))
     }
     fn overlay_icon_pixmap(&self) -> Result<Vec<(i32, i32, Vec<u8>)>, dbus::MethodErr> {
-        let overlay_icon = self.0.borrow();
-        let overlay_icon = overlay_icon
-            .overlay_icon
-            .as_ref()
-            .map(|f| f.as_slice())
-            .unwrap_or_else(|| &[]);
-        Ok(overlay_icon
-            .iter()
-            .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-            .collect())
+        call_with_icon(|overlay_icon| {
+            Ok(overlay_icon
+                .overlay_icon
+                .as_ref()
+                .map(|f| f.as_slice())
+                .unwrap_or_else(|| &[])
+                .iter()
+                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
+                .collect())
+        })
     }
     fn attention_icon_name(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("AttentionIconName"))
     }
     fn attention_icon_pixmap(&self) -> Result<Vec<(i32, i32, Vec<u8>)>, dbus::MethodErr> {
-        let attention_icon = self.0.borrow();
-        let attention_icon = attention_icon
-            .attention_icon
-            .as_ref()
-            .map(|f| f.as_slice())
-            .unwrap_or_else(|| &[]);
-
-        Ok(attention_icon
-            .iter()
-            .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-            .collect())
+        call_with_icon(|attention_icon| {
+            Ok(attention_icon
+                .attention_icon
+                .as_ref()
+                .map(|f| f.as_slice())
+                .unwrap_or_else(|| &[])
+                .iter()
+                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
+                .collect())
+        })
     }
     fn attention_movie_name(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("AttentionMovieName"))
@@ -157,24 +178,23 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
     fn tool_tip(
         &self,
     ) -> Result<(String, Vec<(i32, i32, Vec<u8>)>, String, String), dbus::MethodErr> {
-        let tooltip = self.0.borrow();
-        let tooltip = tooltip
-            .tooltip
-            .as_ref()
-            .ok_or_else(|| dbus::MethodErr::no_property("ToolTip"))?;
-
-        let icon_data = tooltip
-            .icon_data
-            .iter()
-            .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-            .collect();
-
-        Ok((
-            String::new(),
-            icon_data,
-            tooltip.title.clone(),
-            tooltip.description.clone(),
-        ))
+        call_with_icon(|tooltip| {
+            let tooltip = tooltip
+                .tooltip
+                .as_ref()
+                .ok_or_else(|| dbus::MethodErr::no_property("ToolTip"))?;
+            let icon_data = tooltip
+                .icon_data
+                .iter()
+                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
+                .collect();
+            Ok((
+                String::new(),
+                icon_data,
+                tooltip.title.clone(),
+                tooltip.description.clone(),
+            ))
+        })
     }
 }
 
@@ -192,25 +212,26 @@ fn parse_dest(d: &dbus::strings::BusName, s: &str) -> Option<u64> {
     }
 }
 
+thread_local! {
+    static WRAPPER: Rc<RefCell<HashMap<u64, NotifierIcon>>> = Rc::new(RefCell::new(<HashMap<u64, NotifierIcon>>::new()));
+    static ID: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
 fn client_server(r: Receiver<IconClientEvent>) {
-    let mut items = Rc::new(RefCell::new(<HashMap<
-        u64,
-        (NotifierIconWrapper, Crossroads),
-    >>::new()));
+    let items = WRAPPER.with(|w| w.clone());
     let mut last_index = 0u64;
     let c = Rc::new(LocalConnection::new_session().unwrap());
     let pid = std::process::id();
     let bus_prefix = format!("org.freedesktop.StatusNotifierItem-{}-", pid);
-    let items_ = items.clone();
+    let mut cr = Crossroads::new();
+    let iface_token = server::item::register_status_notifier_item::<NotifierIconWrapper>(&mut cr);
+    cr.insert("/StatusNotifierItem", &[iface_token], NotifierIconWrapper);
     c.start_receive(
         dbus::message::MatchRule::new_method_call(),
         Box::new(move |msg, conn| {
             let destination = msg
                 .destination()
                 .expect("Method call with no destination should have been rejected by bus daemon!");
-            let path = msg
-                .path()
-                .expect("Method call with no path should have been rejected by bus daemon!");
             if destination.starts_with(":") {
                 if !msg.get_no_reply() {
                     use dbus::channel::Sender as _;
@@ -224,14 +245,13 @@ fn client_server(r: Receiver<IconClientEvent>) {
                             &b"Messages sent to a unique ID not supported\0"[..],
                         )
                     };
-                    conn.send(msg.error(&err, human_readable));
+                    conn.send(msg.error(&err, human_readable)).unwrap();
                 }
             } else {
                 let id = parse_dest(&destination, &bus_prefix)
                     .expect("bus daemon sent a message to name we never owned");
-                if let Some(cr) = items_.borrow_mut().get_mut(&id) {
-                    cr.1.handle_message(msg, conn).unwrap();
-                }
+                ID.with(|c| c.set(id));
+                cr.handle_message(msg, conn).unwrap();
             }
             true
         }),
@@ -243,7 +263,10 @@ fn client_server(r: Receiver<IconClientEvent>) {
         Duration::from_millis(1000),
     );
 
-    let path = dbus::Path::new("/StatusNotifierItem").expect("validated above");
+    let path = unsafe {
+        // SAFETY: the path is correct
+        dbus::Path::from_slice_unchecked("/StatusNotifierItem\0")
+    };
     loop {
         c.process(Duration::from_millis(100)).unwrap();
         while let Some(item) = r.recv_timeout(Duration::from_millis(100)).ok() {
@@ -257,8 +280,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 c.request_name(name.clone(), false, true, true)
                     .expect("Cannot acquire name bus name?");
 
-                let mut cr = Crossroads::new();
-                let notifier = Rc::new(RefCell::new(NotifierIcon {
+                let notifier = NotifierIcon {
                     id: item.id.clone(),
                     category: category.clone(),
 
@@ -268,35 +290,21 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     icon: None,
                     attention_icon: None,
                     overlay_icon: None,
-                }));
-                let iface_token =
-                    server::item::register_status_notifier_item::<NotifierIconWrapper>(&mut cr);
-                cr.insert(
-                    "/StatusNotifierItem",
-                    &[iface_token],
-                    NotifierIconWrapper(notifier.clone()),
-                );
-                items
-                    .borrow_mut()
-                    .insert(item.id, (NotifierIconWrapper(notifier), cr));
+                };
                 watcher
                     .register_status_notifier_item(&format!("{}", name))
                     .unwrap();
+                items.borrow_mut().insert(item.id, notifier);
             } else {
-                let _watcher = c.with_proxy(
-                    "org.kde.StatusNotifierWatcher",
-                    "/StatusNotifierWatcher",
-                    Duration::from_millis(1000),
-                );
                 let mut outer_ni = items.borrow_mut();
-                let ni = &outer_ni.get(&item.id).unwrap().0 .0;
+                let ni = outer_ni.get_mut(&item.id).unwrap();
                 match item.event {
                     ClientEvent::Create { .. } => unreachable!(),
                     ClientEvent::Title(title) => {
-                        ni.borrow_mut().title = title;
+                        ni.title = title;
                     }
                     ClientEvent::Status(status) => {
-                        ni.borrow_mut().status = status;
+                        ni.status = status;
                     }
                     ClientEvent::Icon { typ, mut data } => {
                         for item in &mut data {
@@ -325,7 +333,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
 
                         match typ {
                             IconType::Normal => {
-                                ni.borrow_mut().icon = Some(data);
+                                ni.icon = Some(data);
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewIcon {})
@@ -334,7 +342,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                     .unwrap();
                             }
                             IconType::Attention => {
-                                ni.borrow_mut().attention_icon = Some(data);
+                                ni.attention_icon = Some(data);
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewAttentionIcon {})
@@ -343,7 +351,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                     .unwrap();
                             }
                             IconType::Overlay => {
-                                ni.borrow_mut().overlay_icon = Some(data);
+                                ni.overlay_icon = Some(data);
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewOverlayIcon {})
@@ -354,23 +362,23 @@ fn client_server(r: Receiver<IconClientEvent>) {
                         }
                     }
                     ClientEvent::RemoveIcon(typ) => match typ {
-                        IconType::Normal => ni.borrow_mut().icon = None,
-                        IconType::Attention => ni.borrow_mut().attention_icon = None,
-                        IconType::Overlay => ni.borrow_mut().overlay_icon = None,
+                        IconType::Normal => ni.icon = None,
+                        IconType::Attention => ni.attention_icon = None,
+                        IconType::Overlay => ni.overlay_icon = None,
                     },
                     ClientEvent::Tooltip {
                         icon_data,
                         title,
                         description,
                     } => {
-                        ni.borrow_mut().tooltip = Some(Tooltip {
+                        ni.tooltip = Some(Tooltip {
                             title,
                             description,
                             icon_data: icon_data,
                         });
                     }
                     ClientEvent::RemoveTooltip => {
-                        ni.borrow_mut().tooltip = None;
+                        ni.tooltip = None;
                     }
 
                     ClientEvent::Destroy => {
