@@ -400,7 +400,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                      old_owner,
                                      new_owner,
                                  },
-                                 c: &SyncConnection,
+                                 _c: &SyncConnection,
                                  _msg: &Message|
           -> bool {
         if old_owner.is_empty() || !new_owner.is_empty() {

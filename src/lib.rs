@@ -1,10 +1,6 @@
 pub mod client;
 pub mod server;
 
-use std::error::Error;
-
-use client::item::StatusNotifierItem;
-
 #[derive(Debug, bincode::Decode, bincode::Encode)]
 pub enum IconType {
     Normal,
