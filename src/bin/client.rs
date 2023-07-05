@@ -199,7 +199,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
 }
 
 fn parse_dest(d: &dbus::strings::BusName, s: &str) -> Option<u64> {
-    if d.len() < s.len() + 1 {
+    if d.len() <= s.len() {
         return None; // too short
     }
     let (first, rest) = d.split_at(s.len());
@@ -235,16 +235,12 @@ fn client_server(r: Receiver<IconClientEvent>) {
             if destination.starts_with(":") {
                 if !msg.get_no_reply() {
                     use dbus::channel::Sender as _;
-                    let err = unsafe {
-                        // SAFETY: the preconditions are held
-                        ErrorName::from_slice_unchecked("org.freedesktop.DBus.Error.NotSupported\0")
-                    };
-                    let human_readable = unsafe {
-                        // SAFETY: the preconditions are held
-                        CStr::from_bytes_with_nul_unchecked(
-                            &b"Messages sent to a unique ID not supported\0"[..],
-                        )
-                    };
+                    let err =
+                        ErrorName::from_slice("org.freedesktop.DBus.Error.NotSupported\0").unwrap();
+                    let human_readable = CStr::from_bytes_with_nul(
+                        &b"Messages sent to a unique ID not supported\0"[..],
+                    )
+                    .unwrap();
                     conn.send(msg.error(&err, human_readable)).unwrap();
                 }
             } else {
