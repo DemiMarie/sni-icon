@@ -118,10 +118,10 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         Ok(0)
     }
     fn icon_theme_path(&self) -> Result<String, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property(""))
+        Err(dbus::MethodErr::no_property("icon_theme_path"))
     }
     fn menu(&self) -> Result<dbus::Path<'static>, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property(""))
+        Err(dbus::MethodErr::no_property("menu"))
     }
     fn item_is_menu(&self) -> Result<bool, dbus::MethodErr> {
         Ok(false)
