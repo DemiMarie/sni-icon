@@ -310,17 +310,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
             let bus_name = &item[..iindex];
             let object_path = &item[iindex..];
+            let icon = c.with_proxy(bus_name, object_path, Duration::from_millis(1000));
+            let category = icon.category()?;
             index += 1;
             let id = index;
             eprintln!("Got new object {:?}, id {}", &item, id);
-            let icon = c.with_proxy(bus_name, object_path, Duration::from_millis(1000));
 
             bincode::encode_into_std_write(
                 IconClientEvent {
                     id,
-                    event: ClientEvent::Create {
-                        category: icon.category()?,
-                    },
+                    event: ClientEvent::Create { category },
                 },
                 &mut std::io::stdout().lock(),
                 bincode::config::standard(),
