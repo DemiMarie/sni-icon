@@ -1,6 +1,7 @@
 use dbus::blocking::{Connection, SyncConnection};
 
 use dbus::message::SignalArgs;
+use dbus::strings::{BusName, Path};
 use dbus::Message;
 
 use std::collections::HashMap;
@@ -22,20 +23,21 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
     out.flush().expect("Cannot flush stdout");
 }
 
-fn reader(name_map: Arc<Mutex<HashMap<u64, String>>>) {
+fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>) {
     let mut stdin = std::io::stdin().lock();
     let c = Connection::new_session().unwrap();
     loop {
         let item: sni_icon::IconServerEvent =
             bincode::decode_from_std_read(&mut stdin, bincode::config::standard()).unwrap();
         eprintln!("->server {:?}", item);
-        if let Some(pathname) = name_map.lock().unwrap().get(&item.id) {
-            let iindex = pathname.find('/').unwrap();
-            let icon = c.with_proxy(
-                &pathname[..iindex],
-                &pathname[iindex..],
-                Duration::from_millis(1000),
-            );
+        if let Some(pathname) = reverse_name_map.lock().unwrap().get(&item.id) {
+            let (bus_name, object_path) = match pathname.find('/') {
+                None => (&pathname[..], "/StatusNotifierItem"),
+                Some(position) => pathname.split_at(position),
+            };
+            // bus name and object path validated on map entry insertion,
+            // no further validation required
+            let icon = c.with_proxy(bus_name, object_path, Duration::from_millis(1000));
 
             match item.event {
                 ServerEvent::Activate { x, y } => icon.activate(x, y).unwrap_or_else(|e| {
@@ -304,13 +306,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut go =
         move |item: String, c: &SyncConnection| -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Going!");
-            let iindex = match item.find('/') {
-                None => return Ok(()), // invalid name
-                Some(position) => position,
+            let (bus_name, object_path) = match item.find('/') {
+                None => (&item[..], "/StatusNotifierItem"),
+                Some(position) => item.split_at(position),
             };
-            let bus_name = &item[..iindex];
-            let object_path = &item[iindex..];
-            let icon = c.with_proxy(bus_name, object_path, Duration::from_millis(1000));
+            let bus_name = BusName::new(bus_name)?;
+            let object_path = Path::new(object_path)?;
+            let icon = c.with_proxy(bus_name.clone(), object_path, Duration::from_millis(1000));
             let category = icon.category()?;
             index += 1;
             let id = index;
@@ -328,12 +330,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             name_map_
                 .lock()
                 .expect("poisoned?")
-                .insert(bus_name.to_owned(), id);
-            reverse_name_map_
-                .lock()
-                .unwrap()
-                .insert(id, bus_name.to_owned());
-            eprintln!("Create event sent");
+                .insert(bus_name.to_string(), id);
+            eprintln!(
+                "Create event sent, {:?} added to reverse name map",
+                &bus_name.to_string()
+            );
+            reverse_name_map_.lock().unwrap().insert(id, item);
 
             bincode::encode_into_std_write(
                 IconClientEvent {
@@ -402,6 +404,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                  _c: &SyncConnection,
                                  _msg: &Message|
           -> bool {
+        eprintln!("Name {:?} lost", &name);
         if old_owner.is_empty() || !new_owner.is_empty() {
             return true;
         }
@@ -410,12 +413,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             None => return true,
         };
         eprintln!("Name {} lost, destroying icon {}", &name, id);
-        let r = reverse_name_map
+        reverse_name_map
             .lock()
             .unwrap()
             .remove(&id)
             .expect("reverse and forward maps inconsistent");
-        assert_eq!(name, r, "reverse and forward maps inconsistent");
         bincode::encode_into_std_write(
             IconClientEvent {
                 id,
