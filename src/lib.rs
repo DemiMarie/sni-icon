@@ -12,6 +12,7 @@ pub enum IconType {
 pub enum ClientEvent {
     Create {
         category: String,
+        app_id: String,
     },
 
     Title(Option<String>),

@@ -17,9 +17,12 @@ use std::sync::mpsc::Receiver;
 
 use sni_icon::*;
 
+use sha2::{Digest as _, Sha256};
+
 struct NotifierIcon {
     id: u64,
     category: String,
+    app_id: String,
 
     tooltip: Option<Tooltip>,
     title: Option<String>,
@@ -98,7 +101,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         call_with_icon(|icon| Ok(icon.category.clone()))
     }
     fn id(&self) -> Result<String, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property("Id"))
+        call_with_icon(|icon| Ok(icon.app_id.clone()))
     }
     fn title(&self) -> Result<String, dbus::MethodErr> {
         call_with_icon(|icon| {
@@ -268,17 +271,64 @@ fn client_server(r: Receiver<IconClientEvent>) {
         c.process(Duration::from_millis(100)).unwrap();
         while let Some(item) = r.recv_timeout(Duration::from_millis(100)).ok() {
             let name = format!("org.freedesktop.StatusNotifierItem-{}-{}", pid, item.id);
-            if let ClientEvent::Create { category } = &item.event {
+            if let ClientEvent::Create { category, app_id } = &item.event {
+                const PREFIX: &'static str = "org.qubes-os.vm.app-id.";
+                let app_id = PREFIX.to_owned() + app_id;
                 if item.id <= last_index {
                     panic!("Item ID not monotonically increasing");
                 }
                 last_index = item.id;
-                eprintln!("Registering new item {}", &name);
+                // FIXME: sanitize the ID
+                // FIXME: this is C code (libdbus) and can be disabled (wtf???)
+                let app_id = match dbus::strings::Interface::new(&app_id) {
+                    Ok(_) if false => app_id,
+                    _ => {
+                        let mut h = Sha256::new();
+                        h.update(app_id.as_bytes());
+                        let result = h.finalize();
+                        format!("org.qubes-os.vm.hashed-app-id.{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                        result[0],
+                        result[1],
+                        result[2],
+                        result[3],
+                        result[4],
+                        result[5],
+                        result[6],
+                        result[7],
+                        result[8],
+                        result[9],
+                        result[10],
+                        result[11],
+                        result[12],
+                        result[13],
+                        result[14],
+                        result[15],
+                        result[16],
+                        result[17],
+                        result[18],
+                        result[19],
+                        result[20],
+                        result[21],
+                        result[22],
+                        result[23],
+                        result[24],
+                        result[25],
+                        result[26],
+                        result[27],
+                        result[28],
+                        result[29],
+                        result[30],
+                        result[31])
+                    }
+                };
+
+                eprintln!("Registering new item {}, app id is {:?}", &name, app_id);
                 c.request_name(name.clone(), false, true, true)
-                    .expect("Cannot acquire name bus name?");
+                    .expect("Cannot acquire bus name {name}?");
 
                 let notifier = NotifierIcon {
-                    id: item.id.clone(),
+                    id: item.id,
+                    app_id,
                     category: category.clone(),
 
                     tooltip: None,

@@ -314,6 +314,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let object_path = Path::new(object_path)?;
             let icon = c.with_proxy(bus_name.clone(), object_path, Duration::from_millis(1000));
             let category = icon.category()?;
+            let app_id = icon.id()?;
+            if app_id.starts_with("org.qubes-os.vm.") {
+                return Ok(());
+            }
             index += 1;
             let id = index;
             eprintln!("Got new object {:?}, id {}", &item, id);
@@ -321,7 +325,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             bincode::encode_into_std_write(
                 IconClientEvent {
                     id,
-                    event: ClientEvent::Create { category },
+                    event: ClientEvent::Create { category, app_id },
                 },
                 &mut std::io::stdout().lock(),
                 bincode::config::standard(),
