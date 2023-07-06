@@ -263,6 +263,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
         // SAFETY: the path is correct
         dbus::Path::from_slice_unchecked("/StatusNotifierItem\0")
     };
+    dbus::strings::Interface::new("bogus").expect_err("no-string-validation must be off!");
     loop {
         c.process(Duration::from_millis(100)).unwrap();
         while let Some(item) = r.recv_timeout(Duration::from_millis(100)).ok() {
