@@ -201,18 +201,51 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
     }
 }
 
-fn parse_dest(d: &dbus::strings::BusName, s: &str) -> Option<u64> {
-    if d.len() <= s.len() {
+fn parse_dest(d: &str, prefix: &str, suffix: &str) -> Option<u64> {
+    let (total_len, prefix_len, suffix_len) = (d.len(), prefix.len(), suffix.len());
+    if total_len <= prefix_len + suffix_len {
         return None; // too short
     }
-    let (first, rest) = d.split_at(s.len());
-    if first != s {
-        return None; // bad prefix
+    let suffix_start = total_len - suffix_len;
+    let (first, middle, rest) = (
+        &d[..prefix_len],
+        &d[prefix_len..suffix_start],
+        &d[suffix_start..],
+    );
+    eprintln!("First {:?}, middle {:?}, last {:?}", first, middle, rest);
+    if first != prefix {
+        eprintln!(
+            "First part {:?} does not match expected prefix {:?}",
+            first, prefix
+        );
+        return None;
     }
-    match rest.as_bytes()[0] {
-        b'1'..=b'9' => <u64 as core::str::FromStr>::from_str(rest).ok(),
-        _ => None,
+    if rest != suffix {
+        eprintln!(
+            "Last part {:?} does not match expected suffix {:?}",
+            first, suffix
+        );
+        return None; // bad prefix or suffix
     }
+    let first_byte = middle.as_bytes()[0];
+    match first_byte {
+        b'1'..=b'9' => match <u64 as core::str::FromStr>::from_str(middle) {
+            Err(e) => {
+                eprintln!("Parsing error for {:?}: {}", middle, e);
+                None
+            }
+            Ok(0) => unreachable!("0 does not start with 1 through 9"),
+            Ok(x) => Some(x),
+        },
+        _ => {
+            eprintln!("Bad first byte {:?}", first_byte);
+            None
+        }
+    }
+}
+
+fn bus_path(id: u64) -> dbus::Path<'static> {
+    format!("/{}/StatusNotifierItem\0", id).into()
 }
 
 thread_local! {
@@ -226,32 +259,62 @@ fn client_server(r: Receiver<IconClientEvent>) {
     let c = Rc::new(LocalConnection::new_session().unwrap());
     let pid = std::process::id();
     let bus_prefix = format!("org.freedesktop.StatusNotifierItem-{}-", pid);
-    let mut cr = Crossroads::new();
-    let iface_token = server::item::register_status_notifier_item::<NotifierIconWrapper>(&mut cr);
-    cr.insert("/StatusNotifierItem", &[iface_token], NotifierIconWrapper);
+    let cr = Rc::new(RefCell::new(Crossroads::new()));
+    let cr_ = cr.clone();
     c.start_receive(
         dbus::message::MatchRule::new_method_call(),
         Box::new(move |msg, conn| {
-            let destination = msg
-                .destination()
-                .expect("Method call with no destination should have been rejected by bus daemon!");
-            if destination.starts_with(":") {
-                if !msg.get_no_reply() {
-                    use dbus::channel::Sender as _;
-                    let err =
-                        ErrorName::from_slice("org.freedesktop.DBus.Error.NotSupported\0").unwrap();
-                    let human_readable = CStr::from_bytes_with_nul(
-                        &b"Messages sent to a unique ID not supported\0"[..],
-                    )
-                    .unwrap();
-                    conn.send(msg.error(&err, human_readable)).unwrap();
-                }
+            use dbus::channel::Sender as _;
+            let destination = msg.destination().expect(
+                "Method call with no destination should not have been forwarded by bus daemon!",
+            );
+            let path = msg
+                .path()
+                .expect("Method call with no path should have been rejected by libdbus");
+            let maybe_id = parse_dest(&path, &"/", &"/StatusNotifierItem");
+            let dest_id = if destination.starts_with(":") {
+                None
             } else {
-                let id = parse_dest(&destination, &bus_prefix)
-                    .expect("bus daemon sent a message to name we never owned");
-                ID.with(|c| c.set(id));
-                cr.handle_message(msg, conn).unwrap();
-            }
+                match parse_dest(&destination, &bus_prefix, &"") {
+                    None if !msg.get_no_reply() => {
+                        let err =
+                            ErrorName::from_slice("org.freedesktop.DBus.Error.NameHasNoOwner\0")
+                                .unwrap();
+                        let human_readable = format!(
+                            "Message sent to name {} we never owned (prefix {})\0",
+                            destination, bus_prefix
+                        );
+                        conn.send(msg.error(
+                            &err,
+                            CStr::from_bytes_with_nul(human_readable.as_bytes()).unwrap(),
+                        ))
+                        .expect("dbus msg send fail");
+                        return true;
+                    }
+                    None => return true,
+                    Some(id) => Some(id),
+                }
+            };
+            match (maybe_id, dest_id) {
+                (Some(id1), Some(id2)) if id1 != id2 => {
+                    if msg.get_no_reply() {
+                        return true;
+                    }
+                    let err = ErrorName::from_slice("org.freedesktop.DBus.Error.UnknownObject\0")
+                        .unwrap();
+                    let human_readable = format!("Message sent to unknown object path {}\0", &path);
+                    conn.send(msg.error(
+                        &err,
+                        CStr::from_bytes_with_nul(human_readable.as_bytes()).unwrap(),
+                    ))
+                    .expect("dbus msg send fail");
+                }
+                (Some(id), _) => {
+                    ID.with(|id_| id_.set(id));
+                    cr.borrow_mut().handle_message(msg, conn).unwrap();
+                }
+                (None, _) => cr.borrow_mut().handle_message(msg, conn).unwrap(),
+            };
             true
         }),
     );
@@ -262,10 +325,6 @@ fn client_server(r: Receiver<IconClientEvent>) {
         Duration::from_millis(1000),
     );
 
-    let path = unsafe {
-        // SAFETY: the path is correct
-        dbus::Path::from_slice_unchecked("/StatusNotifierItem\0")
-    };
     dbus::strings::Interface::new("bogus").expect_err("no-string-validation must be off!");
     loop {
         c.process(Duration::from_millis(100)).unwrap();
@@ -276,6 +335,10 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 let app_id = PREFIX.to_owned() + app_id;
                 if item.id <= last_index {
                     panic!("Item ID not monotonically increasing");
+                }
+                if category.is_empty() {
+                    eprintln!("Empty category for ID {:?}!", app_id);
+                    continue;
                 }
                 last_index = item.id;
                 // FIXME: sanitize the ID
@@ -338,10 +401,21 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     attention_icon: None,
                     overlay_icon: None,
                 };
-                watcher
-                    .register_status_notifier_item(&format!("{}", name))
-                    .unwrap();
                 items.borrow_mut().insert(item.id, notifier);
+                {
+                    let mut cr = cr_.borrow_mut();
+                    let iface_token = server::item::register_status_notifier_item::<
+                        NotifierIconWrapper,
+                    >(&mut *cr);
+                    cr.insert(
+                        format!("/{}/StatusNotifierItem", item.id),
+                        &[iface_token],
+                        NotifierIconWrapper,
+                    )
+                }
+                watcher
+                    .register_status_notifier_item(&format!("{}/{}", name, item.id))
+                    .unwrap();
             } else {
                 let mut outer_ni = items.borrow_mut();
                 let ni = outer_ni.get_mut(&item.id).unwrap();
@@ -377,7 +451,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                 }
                             }
                         }
-
+                        let path = bus_path(item.id);
                         match typ {
                             IconType::Normal => {
                                 ni.icon = Some(data);
@@ -429,10 +503,15 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     }
 
                     ClientEvent::Destroy => {
+                        eprintln!("Releasing ID {}", item.id);
                         c.release_name(name.clone())
                             .expect("Cannot release bus name?");
                         eprintln!("Released bus name {name}");
-                        outer_ni.remove(&item.id);
+                        {
+                            let path = bus_path(item.id);
+                            cr_.borrow_mut().remove::<()>(&path);
+                        }
+                        outer_ni.remove(&item.id).expect("Removed nonexistent ID?");
                     }
                 }
             }
