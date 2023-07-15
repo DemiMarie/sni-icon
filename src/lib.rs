@@ -13,6 +13,7 @@ pub enum ClientEvent {
     Create {
         category: String,
         app_id: String,
+        has_menu: bool,
     },
 
     Title(Option<String>),

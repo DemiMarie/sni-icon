@@ -330,7 +330,12 @@ fn client_server(r: Receiver<IconClientEvent>) {
         c.process(Duration::from_millis(100)).unwrap();
         while let Some(item) = r.recv_timeout(Duration::from_millis(100)).ok() {
             let name = format!("org.freedesktop.StatusNotifierItem-{}-{}", pid, item.id);
-            if let ClientEvent::Create { category, app_id } = &item.event {
+            if let ClientEvent::Create {
+                category,
+                app_id,
+                has_menu,
+            } = &item.event
+            {
                 const PREFIX: &'static str = "org.qubes-os.vm.app-id.";
                 let app_id = PREFIX.to_owned() + app_id;
                 if item.id <= last_index {
@@ -339,6 +344,9 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 if category.is_empty() {
                     eprintln!("Empty category for ID {:?}!", app_id);
                     continue;
+                }
+                if *has_menu {
+                    eprintln!("NYI: displaying menu")
                 }
                 last_index = item.id;
                 // FIXME: sanitize the ID

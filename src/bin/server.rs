@@ -23,14 +23,14 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
     out.flush().expect("Cannot flush stdout");
 }
 
-fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>) {
+fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, (String, Option<dbus::Path>)>>>) {
     let mut stdin = std::io::stdin().lock();
     let c = Connection::new_session().unwrap();
     loop {
         let item: sni_icon::IconServerEvent =
             bincode::decode_from_std_read(&mut stdin, bincode::config::standard()).unwrap();
         eprintln!("->server {:?}", item);
-        if let Some(pathname) = reverse_name_map.lock().unwrap().get(&item.id) {
+        if let Some((pathname, _)) = reverse_name_map.lock().unwrap().get(&item.id) {
             let (bus_name, object_path) = match pathname.find('/') {
                 None => (&pathname[..], "/StatusNotifierItem"),
                 Some(position) => pathname.split_at(position),
@@ -99,8 +99,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         Duration::from_millis(1000),
     );
 
-    let name_map = Arc::new(Mutex::new(HashMap::<String, u64>::new()));
-    let reverse_name_map = Arc::new(Mutex::new(HashMap::<u64, String>::new()));
+    let name_map = Arc::new(Mutex::new(HashMap::<String, (u64, Option<Path>)>::new()));
+    let reverse_name_map = Arc::new(Mutex::new(HashMap::<u64, (String, Option<Path>)>::new()));
     let reverse_name_map_ = reverse_name_map.clone();
     std::thread::spawn(move || reader(reverse_name_map_));
 
@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Duration::from_millis(1000),
             );
             let nm = name_map_.lock().unwrap();
-            if let Some(&id) = nm.get(&fullpath) {
+            if let Some(&(id, _)) = nm.get(&fullpath) {
                 send_or_panic(IconClientEvent {
                     id,
                     event: ClientEvent::Title(icon.title().ok()),
@@ -136,7 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Duration::from_millis(1000),
             );
             let nm = name_map_.lock().unwrap();
-            if let Some(nm) = nm.get(&fullpath) {
+            if let Some((nm, _)) = nm.get(&fullpath) {
                 if let Ok(icon_pixmap) = icon.icon_pixmap() {
                     bincode::encode_into_std_write(
                         IconClientEvent {
@@ -185,7 +185,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Duration::from_millis(1000),
             );
             let nm = name_map_.lock().unwrap();
-            if let Some(nm) = nm.get(&fullpath) {
+            if let Some((nm, _)) = nm.get(&fullpath) {
                 if let Ok(icon_pixmap) = icon.attention_icon_pixmap() {
                     bincode::encode_into_std_write(
                         IconClientEvent {
@@ -234,11 +234,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Duration::from_millis(1000),
             );
             let nm = name_map_.lock().unwrap();
-            if let Some(nm) = nm.get(&fullpath) {
+            if let Some((nm, _)) = nm.get(&fullpath) {
+                let id = *nm;
                 if let Ok(icon_pixmap) = icon.overlay_icon_pixmap() {
                     bincode::encode_into_std_write(
                         IconClientEvent {
-                            id: nm.clone(),
+                            id,
                             event: ClientEvent::Icon {
                                 typ: IconType::Overlay,
                                 data: icon_pixmap
@@ -258,7 +259,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     bincode::encode_into_std_write(
                         IconClientEvent {
-                            id: nm.clone(),
+                            id,
                             event: ClientEvent::RemoveIcon(IconType::Overlay),
                         },
                         &mut std::io::stdout().lock(),
@@ -284,10 +285,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             let nm = name_map_.lock().unwrap();
 
-            if let Some(nm) = nm.get(&fullpath) {
+            if let Some((id, _)) = nm.get(&fullpath) {
                 bincode::encode_into_std_write(
                     IconClientEvent {
-                        id: nm.clone(),
+                        id: *id,
                         event: ClientEvent::Status(icon.status().ok()),
                     },
                     &mut std::io::stdout().lock(),
@@ -313,11 +314,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             let bus_name = BusName::new(bus_name)?;
             let object_path = Path::new(object_path)?;
             let icon = c.with_proxy(bus_name.clone(), object_path, Duration::from_millis(1000));
-            let category = icon.category()?;
             let app_id = icon.id()?;
             if app_id.starts_with("org.qubes-os.vm.") {
                 return Ok(());
             }
+            let category = icon.category()?;
+            let menu = match icon.menu() {
+                Ok(p) => Some(p),
+                Err(e) => match e.name() {
+                    Some("org.freedesktop.DBus.Error.NoSuchProperty") => None,
+                    _ => return Err(e.into()),
+                },
+            };
             index += 1;
             let id = index;
             eprintln!("Got new object {:?}, id {}", &item, id);
@@ -325,7 +333,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             bincode::encode_into_std_write(
                 IconClientEvent {
                     id,
-                    event: ClientEvent::Create { category, app_id },
+                    event: ClientEvent::Create {
+                        category,
+                        app_id,
+                        has_menu: menu.is_some(),
+                    },
                 },
                 &mut std::io::stdout().lock(),
                 bincode::config::standard(),
@@ -334,12 +346,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             name_map_
                 .lock()
                 .expect("poisoned?")
-                .insert(bus_name.to_string(), id);
+                .insert(bus_name.to_string(), (id, menu.clone()));
             eprintln!(
                 "Create event sent, {:?} added to reverse name map",
                 &bus_name.to_string()
             );
-            reverse_name_map_.lock().unwrap().insert(id, item);
+            reverse_name_map_.lock().unwrap().insert(id, (item, menu));
 
             bincode::encode_into_std_write(
                 IconClientEvent {
@@ -413,7 +425,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             return true;
         }
         let id = match name_map.lock().expect("poisoned?").remove(&name) {
-            Some(i) => i,
+            Some(i) => i.0,
             None => return true,
         };
         eprintln!("Name {} lost, destroying icon {}", &name, id);
