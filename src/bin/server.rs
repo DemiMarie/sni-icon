@@ -10,6 +10,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use sni_icon::client::item::StatusNotifierItem;
+use sni_icon::client::menu::Dbusmenu;
 use sni_icon::client::watcher::StatusNotifierWatcher;
 use sni_icon::*;
 
@@ -289,7 +290,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 bincode::encode_into_std_write(
                     IconClientEvent {
                         id: *id,
-                        event: ClientEvent::Status(icon.status().ok()),
+                        event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
                     },
                     &mut std::io::stdout().lock(),
                     bincode::config::standard(),
@@ -326,10 +327,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                     _ => return Err(e.into()),
                 },
             };
+            match &menu {
+                Some(m) => {
+                    let menu = c.with_proxy(bus_name.clone(), m, Duration::from_millis(1000));
+                    let layout = menu.get_layout(0, -1, vec![])?;
+                    eprintln!("Layout: {:?}", layout);
+                }
+                None => {}
+            }
             index += 1;
             let id = index;
             eprintln!("Got new object {:?}, id {}", &item, id);
-
             bincode::encode_into_std_write(
                 IconClientEvent {
                     id,
@@ -356,7 +364,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             bincode::encode_into_std_write(
                 IconClientEvent {
                     id,
-                    event: ClientEvent::Status(icon.status().ok()),
+                    event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
                 },
                 &mut std::io::stdout().lock(),
                 bincode::config::standard(),

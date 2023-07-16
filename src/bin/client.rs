@@ -1,8 +1,10 @@
 use core::ffi::CStr;
+use dbus::arg::RefArg;
 use dbus::blocking::LocalConnection;
 use dbus::channel::MatchingReceiver;
 use dbus::message::SignalArgs;
 use dbus::strings::ErrorName;
+use dbus::MethodErr;
 use dbus_crossroads::Crossroads;
 use std::collections::HashMap;
 use std::error::Error;
@@ -31,6 +33,8 @@ struct NotifierIcon {
     icon: Option<Vec<IconData>>,
     attention_icon: Option<Vec<IconData>>,
     overlay_icon: Option<Vec<IconData>>,
+
+    has_menu: bool,
 }
 
 struct NotifierIconWrapper;
@@ -58,6 +62,85 @@ fn call_with_icon<T, U: FnOnce(&mut NotifierIcon) -> Result<T, dbus::MethodErr>>
             Some(icon) => cb(icon),
         }
     })
+}
+
+impl server::menu::Dbusmenu for NotifierIconWrapper {
+    fn get_layout(
+        &mut self,
+        _: i32,
+        _: i32,
+        _: Vec<std::string::String>,
+    ) -> Result<
+        (
+            u32,
+            (
+                i32,
+                HashMap<std::string::String, dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
+                Vec<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
+            ),
+        ),
+        MethodErr,
+    > {
+        Err(dbus::MethodErr::failed("GetLayout"))
+    }
+    fn get_group_properties(
+        &mut self,
+        _: Vec<i32>,
+        _: Vec<std::string::String>,
+    ) -> Result<
+        Vec<(
+            i32,
+            HashMap<std::string::String, dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
+        )>,
+        MethodErr,
+    > {
+        todo!()
+    }
+    fn get_property(
+        &mut self,
+        _: i32,
+        _: std::string::String,
+    ) -> Result<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>, MethodErr> {
+        todo!()
+    }
+    fn event(
+        &mut self,
+        _: i32,
+        _: std::string::String,
+        _: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
+        _: u32,
+    ) -> Result<(), MethodErr> {
+        todo!()
+    }
+    fn event_group(
+        &mut self,
+        _: Vec<(
+            i32,
+            std::string::String,
+            dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
+            u32,
+        )>,
+    ) -> Result<Vec<i32>, MethodErr> {
+        todo!()
+    }
+    fn about_to_show(&mut self, _: i32) -> Result<bool, MethodErr> {
+        todo!()
+    }
+    fn about_to_show_group(&mut self, _: Vec<i32>) -> Result<(Vec<i32>, Vec<i32>), MethodErr> {
+        todo!()
+    }
+    fn version(&self) -> Result<u32, MethodErr> {
+        Ok(1)
+    }
+    fn text_direction(&self) -> Result<std::string::String, MethodErr> {
+        Ok("ltr".to_owned())
+    }
+    fn status(&self) -> Result<std::string::String, MethodErr> {
+        Ok("normal".to_owned())
+    }
+    fn icon_theme_path(&self) -> Result<Vec<std::string::String>, MethodErr> {
+        Err(dbus::MethodErr::no_property("IconThemePath"))
+    }
 }
 
 impl server::item::StatusNotifierItem for NotifierIconWrapper {
@@ -124,7 +207,13 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         Err(dbus::MethodErr::no_property("icon_theme_path"))
     }
     fn menu(&self) -> Result<dbus::Path<'static>, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property("menu"))
+        call_with_icon(|icon| {
+            if icon.has_menu {
+                Ok(bus_path(icon.id))
+            } else {
+                Err(dbus::MethodErr::no_property("menu"))
+            }
+        })
     }
     fn item_is_menu(&self) -> Result<bool, dbus::MethodErr> {
         Ok(false)
@@ -212,7 +301,7 @@ fn parse_dest(d: &str, prefix: &str, suffix: &str) -> Option<u64> {
         &d[prefix_len..suffix_start],
         &d[suffix_start..],
     );
-    eprintln!("First {:?}, middle {:?}, last {:?}", first, middle, rest);
+    // eprintln!("First {:?}, middle {:?}, last {:?}", first, middle, rest);
     if first != prefix {
         eprintln!(
             "First part {:?} does not match expected prefix {:?}",
@@ -336,6 +425,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 has_menu,
             } = &item.event
             {
+                let has_menu = *has_menu;
                 const PREFIX: &'static str = "org.qubes-os.vm.app-id.";
                 let app_id = PREFIX.to_owned() + app_id;
                 if item.id <= last_index {
@@ -345,7 +435,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     eprintln!("Empty category for ID {:?}!", app_id);
                     continue;
                 }
-                if *has_menu {
+                if has_menu {
                     eprintln!("NYI: displaying menu")
                 }
                 last_index = item.id;
@@ -408,6 +498,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     icon: None,
                     attention_icon: None,
                     overlay_icon: None,
+                    has_menu,
                 };
                 items.borrow_mut().insert(item.id, notifier);
                 {
@@ -415,12 +506,16 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     let iface_token = server::item::register_status_notifier_item::<
                         NotifierIconWrapper,
                     >(&mut *cr);
-                    cr.insert(
-                        format!("/{}/StatusNotifierItem", item.id),
-                        &[iface_token],
-                        NotifierIconWrapper,
-                    )
+                    let bus_name = format!("/{}/StatusNotifierItem", item.id);
+                    if has_menu {
+                        let iface_token_2 =
+                            server::menu::register_dbusmenu::<NotifierIconWrapper>(&mut *cr);
+                        cr.insert(bus_name, &[iface_token, iface_token_2], NotifierIconWrapper);
+                    } else {
+                        cr.insert(bus_name, &[iface_token], NotifierIconWrapper);
+                    }
                 }
+                eprintln!("Registering name {:?}", name);
                 watcher
                     .register_status_notifier_item(&format!("{}/{}", name, item.id))
                     .unwrap();
