@@ -1,4 +1,3 @@
-use core::ffi::CStr;
 use dbus::arg::RefArg;
 use dbus::blocking::LocalConnection;
 use dbus::channel::MatchingReceiver;
@@ -347,49 +346,18 @@ fn client_server(r: Receiver<IconClientEvent>) {
     let mut last_index = 0u64;
     let c = Rc::new(LocalConnection::new_session().unwrap());
     let pid = std::process::id();
-    let bus_prefix = format!("org.freedesktop.StatusNotifierItem-{}-", pid);
-    let unknown_object =
-        ErrorName::from_slice("org.freedesktop.DBus.Error.UnknownObject\0").unwrap();
     let cr = Rc::new(RefCell::new(Crossroads::new()));
     let cr_ = cr.clone();
     c.start_receive(
         dbus::message::MatchRule::new_method_call(),
         Box::new(move |msg, conn| {
-            use dbus::channel::Sender as _;
-            let unique_name = conn.unique_name();
-            let destination = msg.destination().expect(
-                "Method call with no destination should not have been forwarded by bus daemon!",
-            );
             let path = msg
                 .path()
                 .expect("Method call with no path should have been rejected by libdbus");
-            let maybe_id = parse_dest(&path, &"/", &"/StatusNotifierItem");
-            let dest_id = if destination == unique_name {
-                None
-            } else {
-                Some(
-                    parse_dest(&destination, &bus_prefix, &"")
-                        .expect("bus daemon sent us a message to a name we never owned!"),
-                )
-            };
-            match (maybe_id, dest_id) {
-                (Some(id1), Some(id2)) if id1 != id2 => {
-                    if msg.get_no_reply() {
-                        return true;
-                    }
-                    let human_readable = format!("Message sent to unknown object path {}\0", &path);
-                    conn.send(msg.error(
-                        &unknown_object,
-                        CStr::from_bytes_with_nul(human_readable.as_bytes()).unwrap(),
-                    ))
-                    .expect("dbus msg send fail");
-                }
-                (Some(id), _) => {
-                    ID.with(|id_| id_.set(id));
-                    cr.borrow_mut().handle_message(msg, conn).unwrap();
-                }
-                (None, _) => cr.borrow_mut().handle_message(msg, conn).unwrap(),
-            };
+            if let Some(id) = parse_dest(&path, &"/", &"/StatusNotifierItem") {
+                ID.with(|id_| id_.set(id))
+            }
+            cr.borrow_mut().handle_message(msg, conn).unwrap();
             true
         }),
     );
