@@ -348,6 +348,9 @@ fn client_server(r: Receiver<IconClientEvent>) {
     let c = Rc::new(LocalConnection::new_session().unwrap());
     let pid = std::process::id();
     let bus_prefix = format!("org.freedesktop.StatusNotifierItem-{}-", pid);
+    let no_owner = ErrorName::from_slice("org.freedesktop.DBus.Error.NameHasNoOwner\0").unwrap();
+    let unknown_object =
+        ErrorName::from_slice("org.freedesktop.DBus.Error.UnknownObject\0").unwrap();
     let cr = Rc::new(RefCell::new(Crossroads::new()));
     let cr_ = cr.clone();
     c.start_receive(
@@ -366,15 +369,12 @@ fn client_server(r: Receiver<IconClientEvent>) {
             } else {
                 match parse_dest(&destination, &bus_prefix, &"") {
                     None if !msg.get_no_reply() => {
-                        let err =
-                            ErrorName::from_slice("org.freedesktop.DBus.Error.NameHasNoOwner\0")
-                                .unwrap();
                         let human_readable = format!(
                             "Message sent to name {} we never owned (prefix {})\0",
                             destination, bus_prefix
                         );
                         conn.send(msg.error(
-                            &err,
+                            &no_owner,
                             CStr::from_bytes_with_nul(human_readable.as_bytes()).unwrap(),
                         ))
                         .expect("dbus msg send fail");
@@ -389,11 +389,9 @@ fn client_server(r: Receiver<IconClientEvent>) {
                     if msg.get_no_reply() {
                         return true;
                     }
-                    let err = ErrorName::from_slice("org.freedesktop.DBus.Error.UnknownObject\0")
-                        .unwrap();
                     let human_readable = format!("Message sent to unknown object path {}\0", &path);
                     conn.send(msg.error(
-                        &err,
+                        &unknown_object,
                         CStr::from_bytes_with_nul(human_readable.as_bytes()).unwrap(),
                     ))
                     .expect("dbus msg send fail");
