@@ -442,7 +442,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 // FIXME: sanitize the ID
                 // FIXME: this is C code (libdbus) and can be disabled (wtf???)
                 let app_id = match dbus::strings::Interface::new(&app_id) {
-                    Ok(_) if false => app_id,
+                    Ok(_) => app_id,
                     _ => {
                         let mut h = Sha256::new();
                         h.update(app_id.as_bytes());
