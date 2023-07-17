@@ -357,6 +357,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
         dbus::message::MatchRule::new_method_call(),
         Box::new(move |msg, conn| {
             use dbus::channel::Sender as _;
+            let unique_name = conn.unique_name();
             let destination = msg.destination().expect(
                 "Method call with no destination should not have been forwarded by bus daemon!",
             );
@@ -364,11 +365,12 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 .path()
                 .expect("Method call with no path should have been rejected by libdbus");
             let maybe_id = parse_dest(&path, &"/", &"/StatusNotifierItem");
-            let dest_id = if destination.starts_with(":") {
+            let dest_id = if destination == unique_name {
                 None
             } else {
                 match parse_dest(&destination, &bus_prefix, &"") {
-                    None if !msg.get_no_reply() => {
+                    None if msg.get_no_reply() => return true,
+                    None => {
                         let human_readable = format!(
                             "Message sent to name {} we never owned (prefix {})\0",
                             destination, bus_prefix
@@ -380,7 +382,6 @@ fn client_server(r: Receiver<IconClientEvent>) {
                         .expect("dbus msg send fail");
                         return true;
                     }
-                    None => return true,
                     Some(id) => Some(id),
                 }
             };
