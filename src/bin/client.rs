@@ -1,293 +1,24 @@
-use dbus::arg::RefArg;
+#[path = "client/item.rs"]
+mod item;
+
 use dbus::blocking::LocalConnection;
 use dbus::channel::MatchingReceiver;
 use dbus::message::SignalArgs;
-use dbus::strings::ErrorName;
-use dbus::MethodErr;
+
 use dbus_crossroads::Crossroads;
+use item::{NotifierIcon, NotifierIconWrapper};
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::Write;
 use std::time::Duration;
 
 use sni_icon::client::watcher::StatusNotifierWatcher;
+use sni_icon::{server, ClientEvent, IconType};
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
-use sni_icon::*;
-
 use sha2::{Digest as _, Sha256};
-
-struct NotifierIcon {
-    id: u64,
-    category: String,
-    app_id: String,
-
-    tooltip: Option<Tooltip>,
-    title: Option<String>,
-    status: Option<String>,
-
-    icon: Option<Vec<IconData>>,
-    attention_icon: Option<Vec<IconData>>,
-    overlay_icon: Option<Vec<IconData>>,
-
-    has_menu: bool,
-}
-
-struct NotifierIconWrapper;
-
-fn send_or_panic<T: bincode::Encode>(s: T) {
-    let mut out = std::io::stdout().lock();
-    bincode::encode_into_std_write(s, &mut out, bincode::config::standard())
-        .expect("Cannot write to stdout");
-    out.flush().expect("Cannot flush stdout");
-}
-
-fn call_with_icon<T, U: FnOnce(&mut NotifierIcon) -> Result<T, dbus::MethodErr>>(
-    cb: U,
-) -> Result<T, dbus::MethodErr> {
-    WRAPPER.with(|items| {
-        let mut items = items.borrow_mut();
-        match ID.with(|id| items.get_mut(&id.get())) {
-            None => {
-                let err = unsafe {
-                    // SAFETY: the preconditions are held
-                    ErrorName::from_slice_unchecked("org.freedesktop.DBus.Error.ServiceUnknown\0")
-                };
-                Err((err, "Icon does not exist").into())
-            }
-            Some(icon) => cb(icon),
-        }
-    })
-}
-
-impl server::menu::Dbusmenu for NotifierIconWrapper {
-    fn get_layout(
-        &mut self,
-        _: i32,
-        _: i32,
-        _: Vec<std::string::String>,
-    ) -> Result<
-        (
-            u32,
-            (
-                i32,
-                HashMap<std::string::String, dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
-                Vec<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
-            ),
-        ),
-        MethodErr,
-    > {
-        Err(dbus::MethodErr::failed("GetLayout"))
-    }
-    fn get_group_properties(
-        &mut self,
-        _: Vec<i32>,
-        _: Vec<std::string::String>,
-    ) -> Result<
-        Vec<(
-            i32,
-            HashMap<std::string::String, dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
-        )>,
-        MethodErr,
-    > {
-        todo!()
-    }
-    fn get_property(
-        &mut self,
-        _: i32,
-        _: std::string::String,
-    ) -> Result<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>, MethodErr> {
-        todo!()
-    }
-    fn event(
-        &mut self,
-        _: i32,
-        _: std::string::String,
-        _: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
-        _: u32,
-    ) -> Result<(), MethodErr> {
-        todo!()
-    }
-    fn event_group(
-        &mut self,
-        _: Vec<(
-            i32,
-            std::string::String,
-            dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
-            u32,
-        )>,
-    ) -> Result<Vec<i32>, MethodErr> {
-        todo!()
-    }
-    fn about_to_show(&mut self, _: i32) -> Result<bool, MethodErr> {
-        todo!()
-    }
-    fn about_to_show_group(&mut self, _: Vec<i32>) -> Result<(Vec<i32>, Vec<i32>), MethodErr> {
-        todo!()
-    }
-    fn version(&self) -> Result<u32, MethodErr> {
-        Ok(1)
-    }
-    fn text_direction(&self) -> Result<std::string::String, MethodErr> {
-        Ok("ltr".to_owned())
-    }
-    fn status(&self) -> Result<std::string::String, MethodErr> {
-        Ok("normal".to_owned())
-    }
-    fn icon_theme_path(&self) -> Result<Vec<std::string::String>, MethodErr> {
-        Err(dbus::MethodErr::no_property("IconThemePath"))
-    }
-}
-
-impl server::item::StatusNotifierItem for NotifierIconWrapper {
-    fn context_menu(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
-        call_with_icon(|icon| {
-            send_or_panic(IconServerEvent {
-                id: icon.id,
-                event: ServerEvent::ContextMenu { x, y },
-            });
-            Ok(())
-        })
-    }
-    fn activate(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
-        call_with_icon(|icon| {
-            send_or_panic(IconServerEvent {
-                id: icon.id,
-                event: ServerEvent::Activate { x, y },
-            });
-            Ok(())
-        })
-    }
-    fn secondary_activate(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
-        call_with_icon(|icon| {
-            send_or_panic(IconServerEvent {
-                id: icon.id,
-                event: ServerEvent::SecondaryActivate { x, y },
-            });
-            Ok(())
-        })
-    }
-    fn scroll(&mut self, delta: i32, orientation: String) -> Result<(), dbus::MethodErr> {
-        call_with_icon(|icon| {
-            send_or_panic(IconServerEvent {
-                id: icon.id,
-                event: ServerEvent::Scroll { delta, orientation },
-            });
-            Ok(())
-        })
-    }
-    fn category(&self) -> Result<String, dbus::MethodErr> {
-        call_with_icon(|icon| Ok(icon.category.clone()))
-    }
-    fn id(&self) -> Result<String, dbus::MethodErr> {
-        call_with_icon(|icon| Ok(icon.app_id.clone()))
-    }
-    fn title(&self) -> Result<String, dbus::MethodErr> {
-        call_with_icon(|icon| {
-            icon.title
-                .clone()
-                .ok_or_else(|| dbus::MethodErr::no_property("Title"))
-        })
-    }
-    fn status(&self) -> Result<String, dbus::MethodErr> {
-        call_with_icon(|icon| {
-            icon.status
-                .clone()
-                .ok_or_else(|| dbus::MethodErr::no_property("status"))
-        })
-    }
-    fn window_id(&self) -> Result<i32, dbus::MethodErr> {
-        Ok(0)
-    }
-    fn icon_theme_path(&self) -> Result<String, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property("icon_theme_path"))
-    }
-    fn menu(&self) -> Result<dbus::Path<'static>, dbus::MethodErr> {
-        call_with_icon(|icon| {
-            if icon.has_menu {
-                Ok(bus_path(icon.id))
-            } else {
-                Err(dbus::MethodErr::no_property("menu"))
-            }
-        })
-    }
-    fn item_is_menu(&self) -> Result<bool, dbus::MethodErr> {
-        Ok(false)
-    }
-    fn icon_name(&self) -> Result<String, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property("IconName"))
-    }
-    fn icon_pixmap(&self) -> Result<Vec<(i32, i32, Vec<u8>)>, dbus::MethodErr> {
-        call_with_icon(|icon| {
-            Ok(icon
-                .icon
-                .as_ref()
-                .map(|f| f.as_slice())
-                .unwrap_or_else(|| &[])
-                .iter()
-                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-                .collect())
-        })
-    }
-    fn overlay_icon_name(&self) -> Result<String, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property("OverlayIconName"))
-    }
-    fn overlay_icon_pixmap(&self) -> Result<Vec<(i32, i32, Vec<u8>)>, dbus::MethodErr> {
-        call_with_icon(|overlay_icon| {
-            Ok(overlay_icon
-                .overlay_icon
-                .as_ref()
-                .map(|f| f.as_slice())
-                .unwrap_or_else(|| &[])
-                .iter()
-                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-                .collect())
-        })
-    }
-    fn attention_icon_name(&self) -> Result<String, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property("AttentionIconName"))
-    }
-    fn attention_icon_pixmap(&self) -> Result<Vec<(i32, i32, Vec<u8>)>, dbus::MethodErr> {
-        call_with_icon(|attention_icon| {
-            Ok(attention_icon
-                .attention_icon
-                .as_ref()
-                .map(|f| f.as_slice())
-                .unwrap_or_else(|| &[])
-                .iter()
-                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-                .collect())
-        })
-    }
-    fn attention_movie_name(&self) -> Result<String, dbus::MethodErr> {
-        Err(dbus::MethodErr::no_property("AttentionMovieName"))
-    }
-
-    fn tool_tip(
-        &self,
-    ) -> Result<(String, Vec<(i32, i32, Vec<u8>)>, String, String), dbus::MethodErr> {
-        call_with_icon(|tooltip| {
-            let tooltip = tooltip
-                .tooltip
-                .as_ref()
-                .ok_or_else(|| dbus::MethodErr::no_property("ToolTip"))?;
-            let icon_data = tooltip
-                .icon_data
-                .iter()
-                .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
-                .collect();
-            Ok((
-                String::new(),
-                icon_data,
-                tooltip.title.clone(),
-                tooltip.description.clone(),
-            ))
-        })
-    }
-}
 
 fn parse_dest(d: &str, prefix: &str, suffix: &str) -> Option<u64> {
     let (total_len, prefix_len, suffix_len) = (d.len(), prefix.len(), suffix.len());
@@ -341,7 +72,7 @@ thread_local! {
     static ID: std::cell::Cell<u64> = std::cell::Cell::new(0);
 }
 
-fn client_server(r: Receiver<IconClientEvent>) {
+fn client_server(r: Receiver<sni_icon::IconClientEvent>) {
     let items = WRAPPER.with(|w| w.clone());
     let mut last_index = 0u64;
     let c = Rc::new(LocalConnection::new_session().unwrap());
@@ -441,19 +172,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 c.request_name(name.clone(), false, true, true)
                     .expect("Cannot acquire bus name {name}?");
 
-                let notifier = NotifierIcon {
-                    id: item.id,
-                    app_id,
-                    category: category.clone(),
-
-                    tooltip: None,
-                    title: None,
-                    status: None,
-                    icon: None,
-                    attention_icon: None,
-                    overlay_icon: None,
-                    has_menu,
-                };
+                let notifier = NotifierIcon::new(item.id, app_id, category.clone(), has_menu);
                 items.borrow_mut().insert(item.id, notifier);
                 {
                     let mut cr = cr_.borrow_mut();
@@ -479,10 +198,10 @@ fn client_server(r: Receiver<IconClientEvent>) {
                 match item.event {
                     ClientEvent::Create { .. } => unreachable!(),
                     ClientEvent::Title(title) => {
-                        ni.title = title;
+                        ni.set_title(title);
                     }
                     ClientEvent::Status(status) => {
-                        ni.status = status;
+                        ni.set_status(status);
                     }
                     ClientEvent::Icon { typ, mut data } => {
                         for item in &mut data {
@@ -511,7 +230,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                         let path = bus_path(item.id);
                         match typ {
                             IconType::Normal => {
-                                ni.icon = Some(data);
+                                ni.set_icon(Some(data));
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewIcon {})
@@ -520,7 +239,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                     .unwrap();
                             }
                             IconType::Attention => {
-                                ni.attention_icon = Some(data);
+                                ni.set_attention_icon(Some(data));
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewAttentionIcon {})
@@ -529,7 +248,7 @@ fn client_server(r: Receiver<IconClientEvent>) {
                                     .unwrap();
                             }
                             IconType::Overlay => {
-                                ni.overlay_icon = Some(data);
+                                ni.set_overlay_icon(Some(data));
                                 c.channel()
                                     .send(
                                         (server::item::StatusNotifierItemNewOverlayIcon {})
@@ -540,23 +259,23 @@ fn client_server(r: Receiver<IconClientEvent>) {
                         }
                     }
                     ClientEvent::RemoveIcon(typ) => match typ {
-                        IconType::Normal => ni.icon = None,
-                        IconType::Attention => ni.attention_icon = None,
-                        IconType::Overlay => ni.overlay_icon = None,
+                        IconType::Normal => ni.set_icon(None),
+                        IconType::Attention => ni.set_attention_icon(None),
+                        IconType::Overlay => ni.set_overlay_icon(None),
                     },
                     ClientEvent::Tooltip {
                         icon_data,
                         title,
                         description,
                     } => {
-                        ni.tooltip = Some(Tooltip {
+                        ni.set_tooltip(Some(sni_icon::Tooltip {
                             title,
                             description,
                             icon_data: icon_data,
-                        });
+                        }));
                     }
                     ClientEvent::RemoveTooltip => {
-                        ni.tooltip = None;
+                        ni.set_tooltip(None);
                     }
 
                     ClientEvent::Destroy => {
@@ -586,7 +305,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     loop {
         let item = bincode::decode_from_std_read(&mut stdin, bincode::config::standard())?;
         match &item {
-            IconClientEvent {
+            sni_icon::IconClientEvent {
                 id: _,
                 event: ClientEvent::Icon { .. },
             } => {}
