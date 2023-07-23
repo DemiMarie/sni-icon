@@ -12,3 +12,5 @@ dbus = "0.9"
 dbus-crossroads = "0.5.1"
 bincode = "2.0.0-rc.1"
 sha2 = "0.10.7"
+tokio = { version = "1.29.1", features = ["io-std", "rt", "macros", "io-util"] }
+dbus-tokio = { version = "0.7.6", features = ["dbus-crossroads"] }

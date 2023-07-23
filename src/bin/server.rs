@@ -19,8 +19,11 @@ use std::sync::Mutex;
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
-    bincode::encode_into_std_write(s, &mut out, bincode::config::standard())
-        .expect("Cannot write to stdout");
+    let v = bincode::encode_to_vec(s, bincode::config::standard()).expect("Cannot encode data");
+    eprintln!("Sending {} bytes", v.len());
+    out.write_all(&((v.len() as u32).to_le_bytes())[..])
+        .expect("cannot write to stdout");
+    out.write_all(&v[..]).expect("cannot write to stdout");
     out.flush().expect("Cannot flush stdout");
 }
 
@@ -139,38 +142,27 @@ fn main() -> Result<(), Box<dyn Error>> {
             let nm = name_map_.lock().unwrap();
             if let Some((nm, _)) = nm.get(&fullpath) {
                 if let Ok(icon_pixmap) = icon.icon_pixmap() {
-                    bincode::encode_into_std_write(
-                        IconClientEvent {
-                            id: nm.clone(),
-                            event: ClientEvent::Icon {
-                                typ: IconType::Normal,
-                                data: icon_pixmap
-                                    .into_iter()
-                                    .map(|(w, h, data)| IconData {
-                                        width: w as u32,
-                                        height: h as u32,
-                                        data: data,
-                                    })
-                                    .collect(),
-                            },
+                    send_or_panic(IconClientEvent {
+                        id: nm.clone(),
+                        event: ClientEvent::Icon {
+                            typ: IconType::Normal,
+                            data: icon_pixmap
+                                .into_iter()
+                                .map(|(w, h, data)| IconData {
+                                    width: w as u32,
+                                    height: h as u32,
+                                    data: data,
+                                })
+                                .collect(),
                         },
-                        &mut std::io::stdout().lock(),
-                        bincode::config::standard(),
-                    )
-                    .unwrap();
+                    })
+                } else if let Ok(icon_name) = icon.icon_name() {
                 } else {
-                    bincode::encode_into_std_write(
-                        IconClientEvent {
-                            id: nm.clone(),
-                            event: ClientEvent::RemoveIcon(IconType::Normal),
-                        },
-                        &mut std::io::stdout().lock(),
-                        bincode::config::standard(),
-                    )
-                    .unwrap();
+                    send_or_panic(IconClientEvent {
+                        id: nm.clone(),
+                        event: ClientEvent::RemoveIcon(IconType::Normal),
+                    })
                 }
-
-                std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -188,38 +180,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             let nm = name_map_.lock().unwrap();
             if let Some((nm, _)) = nm.get(&fullpath) {
                 if let Ok(icon_pixmap) = icon.attention_icon_pixmap() {
-                    bincode::encode_into_std_write(
-                        IconClientEvent {
-                            id: nm.clone(),
-                            event: ClientEvent::Icon {
-                                typ: IconType::Attention,
-                                data: icon_pixmap
-                                    .into_iter()
-                                    .map(|(w, h, data)| IconData {
-                                        width: w as u32,
-                                        height: h as u32,
-                                        data: data,
-                                    })
-                                    .collect(),
-                            },
+                    send_or_panic(IconClientEvent {
+                        id: nm.clone(),
+                        event: ClientEvent::Icon {
+                            typ: IconType::Attention,
+                            data: icon_pixmap
+                                .into_iter()
+                                .map(|(w, h, data)| IconData {
+                                    width: w as u32,
+                                    height: h as u32,
+                                    data: data,
+                                })
+                                .collect(),
                         },
-                        &mut std::io::stdout().lock(),
-                        bincode::config::standard(),
-                    )
-                    .unwrap();
+                    })
                 } else {
-                    bincode::encode_into_std_write(
-                        IconClientEvent {
-                            id: nm.clone(),
-                            event: ClientEvent::RemoveIcon(IconType::Attention),
-                        },
-                        &mut std::io::stdout().lock(),
-                        bincode::config::standard(),
-                    )
-                    .unwrap();
+                    send_or_panic(IconClientEvent {
+                        id: nm.clone(),
+                        event: ClientEvent::RemoveIcon(IconType::Attention),
+                    })
                 }
-
-                std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -238,38 +218,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some((nm, _)) = nm.get(&fullpath) {
                 let id = *nm;
                 if let Ok(icon_pixmap) = icon.overlay_icon_pixmap() {
-                    bincode::encode_into_std_write(
-                        IconClientEvent {
-                            id,
-                            event: ClientEvent::Icon {
-                                typ: IconType::Overlay,
-                                data: icon_pixmap
-                                    .into_iter()
-                                    .map(|(w, h, data)| IconData {
-                                        width: w as u32,
-                                        height: h as u32,
-                                        data: data,
-                                    })
-                                    .collect(),
-                            },
+                    send_or_panic(IconClientEvent {
+                        id,
+                        event: ClientEvent::Icon {
+                            typ: IconType::Overlay,
+                            data: icon_pixmap
+                                .into_iter()
+                                .map(|(w, h, data)| IconData {
+                                    width: w as u32,
+                                    height: h as u32,
+                                    data: data,
+                                })
+                                .collect(),
                         },
-                        &mut std::io::stdout().lock(),
-                        bincode::config::standard(),
-                    )
-                    .unwrap();
+                    })
                 } else {
-                    bincode::encode_into_std_write(
-                        IconClientEvent {
-                            id,
-                            event: ClientEvent::RemoveIcon(IconType::Overlay),
-                        },
-                        &mut std::io::stdout().lock(),
-                        bincode::config::standard(),
-                    )
-                    .unwrap();
+                    send_or_panic(IconClientEvent {
+                        id,
+                        event: ClientEvent::RemoveIcon(IconType::Overlay),
+                    })
                 }
-
-                std::io::stdout().lock().flush().unwrap();
             }
             true
         },
@@ -287,17 +255,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let nm = name_map_.lock().unwrap();
 
             if let Some((id, _)) = nm.get(&fullpath) {
-                bincode::encode_into_std_write(
-                    IconClientEvent {
-                        id: *id,
-                        event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
-                    },
-                    &mut std::io::stdout().lock(),
-                    bincode::config::standard(),
-                )
-                .unwrap();
-
-                std::io::stdout().lock().flush().unwrap();
+                send_or_panic(IconClientEvent {
+                    id: *id,
+                    event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
+                })
             }
             true
         },
@@ -338,19 +299,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             index += 1;
             let id = index;
             eprintln!("Got new object {:?}, id {}", &item, id);
-            bincode::encode_into_std_write(
-                IconClientEvent {
-                    id,
-                    event: ClientEvent::Create {
-                        category,
-                        app_id,
-                        has_menu: menu.is_some(),
-                    },
+            send_or_panic(IconClientEvent {
+                id,
+                event: ClientEvent::Create {
+                    category,
+                    app_id,
+                    has_menu: menu.is_some(),
                 },
-                &mut std::io::stdout().lock(),
-                bincode::config::standard(),
-            )
-            .expect("error writing to stdout");
+            });
             name_map_
                 .lock()
                 .expect("poisoned?")
@@ -361,14 +317,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             reverse_name_map_.lock().unwrap().insert(id, (item, menu));
 
-            bincode::encode_into_std_write(
-                IconClientEvent {
-                    id,
-                    event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
-                },
-                &mut std::io::stdout().lock(),
-                bincode::config::standard(),
-            )?;
+            send_or_panic(IconClientEvent {
+                id,
+                event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
+            });
 
             for (ty, fun) in [
                 (IconType::Normal, icon.icon_pixmap()),
@@ -376,32 +328,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                 (IconType::Overlay, icon.overlay_icon_pixmap()),
             ] {
                 if let Ok(icon_pixmap) = fun {
-                    bincode::encode_into_std_write(
-                        IconClientEvent {
-                            id,
-                            event: ClientEvent::Icon {
-                                typ: ty,
-                                data: icon_pixmap
-                                    .into_iter()
-                                    .map(|(w, h, data)| IconData {
-                                        width: w as u32,
-                                        height: h as u32,
-                                        data: data,
-                                    })
-                                    .collect(),
-                            },
+                    send_or_panic(IconClientEvent {
+                        id,
+                        event: ClientEvent::Icon {
+                            typ: ty,
+                            data: icon_pixmap
+                                .into_iter()
+                                .map(|(w, h, data)| IconData {
+                                    width: w as u32,
+                                    height: h as u32,
+                                    data: data,
+                                })
+                                .collect(),
                         },
-                        &mut std::io::stdout().lock(),
-                        bincode::config::standard(),
-                    )
-                    .expect("cannot write to stdout");
+                    })
                 }
             }
 
-            std::io::stdout()
-                .lock()
-                .flush()
-                .expect("cannot write to stdout");
             eprintln!("Returning from go()");
             Ok::<(), _>(())
         };
@@ -442,19 +385,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap()
             .remove(&id)
             .expect("reverse and forward maps inconsistent");
-        bincode::encode_into_std_write(
-            IconClientEvent {
-                id,
-                event: ClientEvent::Destroy,
-            },
-            &mut std::io::stdout().lock(),
-            bincode::config::standard(),
-        )
-        .expect("cannot write to stdout");
-        std::io::stdout()
-            .lock()
-            .flush()
-            .expect("cannot write to stdout");
+        send_or_panic(IconClientEvent {
+            id,
+            event: ClientEvent::Destroy,
+        });
         true
     };
 
