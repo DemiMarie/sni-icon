@@ -1,5 +1,8 @@
 use dbus::arg::RefArg;
-use dbus::strings::ErrorName;
+use dbus::channel::Sender as _;
+use dbus::message::SignalArgs;
+use dbus::nonblock::LocalConnection as Connection;
+use dbus::strings::{ErrorName, Path};
 use dbus::MethodErr;
 use sni_icon::{server, IconServerEvent};
 use std::collections::HashMap;
@@ -16,6 +19,7 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
 
 pub(super) struct NotifierIcon {
     id: u64,
+    path: Path<'static>,
     category: String,
     app_id: String,
 
@@ -28,6 +32,10 @@ pub(super) struct NotifierIcon {
     overlay_icon: Option<Vec<IconData>>,
 
     has_menu: bool,
+}
+
+pub(super) fn bus_path(id: u64) -> dbus::Path<'static> {
+    format!("/{}/StatusNotifierItem\0", id).into()
 }
 
 impl NotifierIcon {
@@ -44,31 +52,57 @@ impl NotifierIcon {
             attention_icon: None,
             overlay_icon: None,
             has_menu,
+            path: bus_path(id),
         }
     }
-    pub fn set_title(&mut self, title: Option<String>) {
-        // FIXME: emit D-Bus signal
+    pub fn set_title(&mut self, title: Option<String>, connection: &Connection) {
         self.title = title;
+        connection
+            .send((server::item::StatusNotifierItemNewTitle {}).to_emit_message(&self.path))
+            .unwrap();
     }
-    pub fn set_tooltip(&mut self, tooltip: Option<sni_icon::Tooltip>) {
-        // FIXME: emit D-Bus signal
+    pub fn set_tooltip(&mut self, tooltip: Option<sni_icon::Tooltip>, connection: &Connection) {
         self.tooltip = tooltip;
+        connection
+            .send((server::item::StatusNotifierItemNewToolTip {}).to_emit_message(&self.path))
+            .unwrap();
     }
-    pub fn set_status(&mut self, status: Option<String>) {
-        // FIXME: emit D-Bus signal
-        self.status = status;
+    pub fn set_status(&mut self, status: Option<String>, connection: &Connection) {
+        self.status = status.clone();
+        connection
+            .send(
+                (server::item::StatusNotifierItemNewStatus {
+                    status: status.unwrap_or_else(|| "normal".to_owned()),
+                })
+                .to_emit_message(&self.path),
+            )
+            .unwrap();
     }
-    pub fn set_icon(&mut self, icon: Option<Vec<IconData>>) {
-        // FIXME: emit D-Bus signal
+    pub fn set_icon(&mut self, icon: Option<Vec<IconData>>, connection: &Connection) {
         self.icon = icon;
+        connection
+            .send((server::item::StatusNotifierItemNewIcon {}).to_emit_message(&self.path))
+            .unwrap();
     }
-    pub fn set_attention_icon(&mut self, attention_icon: Option<Vec<IconData>>) {
-        // FIXME: emit D-Bus signal
+    pub fn set_attention_icon(
+        &mut self,
+        attention_icon: Option<Vec<IconData>>,
+        connection: &Connection,
+    ) {
         self.attention_icon = attention_icon;
+        connection
+            .send((server::item::StatusNotifierItemNewAttentionIcon {}).to_emit_message(&self.path))
+            .unwrap();
     }
-    pub fn set_overlay_icon(&mut self, overlay_icon: Option<Vec<IconData>>) {
-        // FIXME: emit D-Bus signal
+    pub fn set_overlay_icon(
+        &mut self,
+        overlay_icon: Option<Vec<IconData>>,
+        connection: &Connection,
+    ) {
         self.overlay_icon = overlay_icon;
+        connection
+            .send((server::item::StatusNotifierItemNewOverlayIcon {}).to_emit_message(&self.path))
+            .unwrap();
     }
 }
 
@@ -158,7 +192,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
     fn menu(&self) -> Result<dbus::Path<'static>, dbus::MethodErr> {
         call_with_icon(|icon| {
             if icon.has_menu {
-                Ok(super::bus_path(icon.id))
+                Ok(icon.path.clone())
             } else {
                 Err(dbus::MethodErr::no_property("menu"))
             }

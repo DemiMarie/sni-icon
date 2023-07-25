@@ -1,8 +1,7 @@
 #[path = "client/item.rs"]
 mod item;
 
-use dbus::channel::{MatchingReceiver, Sender as _};
-use dbus::message::SignalArgs;
+use dbus::channel::MatchingReceiver;
 use dbus::nonblock::Proxy;
 
 use dbus_crossroads::Crossroads;
@@ -61,10 +60,6 @@ fn parse_dest(d: &str, prefix: &str, suffix: &str) -> Option<u64> {
             None
         }
     }
-}
-
-fn bus_path(id: u64) -> dbus::Path<'static> {
-    format!("/{}/StatusNotifierItem\0", id).into()
 }
 
 thread_local! {
@@ -237,10 +232,10 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             match item.event {
                 ClientEvent::Create { .. } => unreachable!(),
                 ClientEvent::Title(title) => {
-                    ni.set_title(title);
+                    ni.set_title(title, &c);
                 }
                 ClientEvent::Status(status) => {
-                    ni.set_status(status);
+                    ni.set_status(status, &c);
                 }
                 ClientEvent::Icon { typ, mut data } => {
                     for item in &mut data {
@@ -266,51 +261,39 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
-                    let path = bus_path(item.id);
                     match typ {
                         IconType::Normal => {
-                            ni.set_icon(Some(data));
-                            c.send(
-                                (server::item::StatusNotifierItemNewIcon {}).to_emit_message(&path),
-                            )
-                            .unwrap();
+                            ni.set_icon(Some(data), &c);
                         }
                         IconType::Attention => {
-                            ni.set_attention_icon(Some(data));
-                            c.send(
-                                (server::item::StatusNotifierItemNewAttentionIcon {})
-                                    .to_emit_message(&path),
-                            )
-                            .unwrap();
+                            ni.set_attention_icon(Some(data), &c);
                         }
                         IconType::Overlay => {
-                            ni.set_overlay_icon(Some(data));
-                            c.send(
-                                (server::item::StatusNotifierItemNewOverlayIcon {})
-                                    .to_emit_message(&path),
-                            )
-                            .unwrap();
+                            ni.set_overlay_icon(Some(data), &c);
                         }
                     }
                 }
                 ClientEvent::RemoveIcon(typ) => match typ {
-                    IconType::Normal => ni.set_icon(None),
-                    IconType::Attention => ni.set_attention_icon(None),
-                    IconType::Overlay => ni.set_overlay_icon(None),
+                    IconType::Normal => ni.set_icon(None, &c),
+                    IconType::Attention => ni.set_attention_icon(None, &c),
+                    IconType::Overlay => ni.set_overlay_icon(None, &c),
                 },
                 ClientEvent::Tooltip {
                     icon_data,
                     title,
                     description,
                 } => {
-                    ni.set_tooltip(Some(sni_icon::Tooltip {
-                        title,
-                        description,
-                        icon_data: icon_data,
-                    }));
+                    ni.set_tooltip(
+                        Some(sni_icon::Tooltip {
+                            title,
+                            description,
+                            icon_data: icon_data,
+                        }),
+                        &c,
+                    );
                 }
                 ClientEvent::RemoveTooltip => {
-                    ni.set_tooltip(None);
+                    ni.set_tooltip(None, &c);
                 }
 
                 ClientEvent::Destroy => {
@@ -320,8 +303,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                         .expect("Cannot release bus name?");
                     eprintln!("Released bus name {name}");
                     {
-                        let path = bus_path(item.id);
-                        cr_.borrow_mut().remove::<()>(&path);
+                        cr_.borrow_mut().remove::<()>(&item::bus_path(item.id));
                     }
                     outer_ni.remove(&item.id).expect("Removed nonexistent ID?");
                 }
