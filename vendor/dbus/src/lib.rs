@@ -26,8 +26,6 @@ pub use crate::message::{Message, MessageType};
 
 pub mod message;
 
-pub mod ffidisp;
-
 mod error;
 pub use error::{Error, MethodErr};
 

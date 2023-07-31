@@ -153,17 +153,6 @@ impl Message {
         Message { msg: ptr}
     }
 
-    /// Get the MessageItems that make up the message.
-    ///
-    /// Note: use `iter_init` or `get1`/`get2`/etc instead for faster access to the arguments.
-    /// This method is provided for backwards compatibility.
-    pub fn get_items(&self) -> Vec<crate::arg::messageitem::MessageItem> {
-        let mut i = self.iter_init();
-        let mut v = vec!();
-        while let Some(z) = crate::arg::messageitem::MessageItem::get(&mut i) { v.push(z); i.next(); }
-        v
-    }
-
     /// Get the D-Bus serial of a message, if one was specified.
     pub fn get_serial(&self) -> Option<u32> {
         let x = unsafe { ffi::dbus_message_get_serial(self.msg) };
@@ -194,15 +183,6 @@ impl Message {
     /// Defaults to true.
     pub fn set_auto_start(&mut self, v: bool) {
         unsafe { ffi::dbus_message_set_auto_start(self.msg, if v { 1 } else { 0 }) }
-    }
-
-    /// Add one or more MessageItems to this Message.
-    ///
-    /// Note: using `append1`, `append2` or `append3` might be faster, especially for large arrays.
-    /// This method is provided for backwards compatibility.
-    pub fn append_items(&mut self, v: &[crate::arg::messageitem::MessageItem]) {
-        let mut ia = IterAppend::new(self);
-        for a in v { a.append_by_ref(&mut ia); }
     }
 
     /// Appends one argument to this message.
