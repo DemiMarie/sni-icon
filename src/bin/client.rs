@@ -140,7 +140,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
         } = &item.event
         {
             let has_menu = *has_menu;
-            const PREFIX: &'static str = "org.qubes-os.vm.app-id.";
+            const PREFIX: &'static str = "org.qubes_os.vm.app_id.";
             let app_id = PREFIX.to_owned() + &app_id;
             if item.id <= last_index {
                 panic!("Item ID not monotonically increasing");
@@ -158,10 +158,11 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             let app_id = match dbus::strings::Interface::new(&app_id) {
                 Ok(_) => app_id,
                 _ => {
+                    eprintln!("Name {:?} is invalid", app_id);
                     let mut h = Sha256::new();
                     h.update(app_id.as_bytes());
                     let result = h.finalize();
-                    format!("org.qubes-os.vm.hashed-app-id.{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    format!("org.qubes_os.vm.hashed_app_id.{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
                             result[0],
                             result[1],
                             result[2],
@@ -271,12 +272,14 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                         IconType::Overlay => {
                             ni.set_overlay_icon(Some(data), &c);
                         }
+                        IconType::Title | IconType::Status => panic!("guest sent bad icon type"),
                     }
                 }
                 ClientEvent::RemoveIcon(typ) => match typ {
                     IconType::Normal => ni.set_icon(None, &c),
                     IconType::Attention => ni.set_attention_icon(None, &c),
                     IconType::Overlay => ni.set_overlay_icon(None, &c),
+                    IconType::Title | IconType::Status => panic!("guest sent bad icon type"),
                 },
                 ClientEvent::Tooltip {
                     icon_data,

@@ -70,7 +70,9 @@ impl<'a, T: nonblock::NonblockReply, C: ::std::ops::Deref<Target=T>> DBus for no
     }
 
     fn add_match(&self, arg0: &str) -> nonblock::MethodReply<()> {
-        self.method_call("org.freedesktop.DBus", "AddMatch", (arg0, ))
+        let x = self.method_call("org.freedesktop.DBus", "AddMatch", (arg0, ));
+        eprintln!("add_match() returned");
+        x
     }
 
     fn remove_match(&self, arg0: &str) -> nonblock::MethodReply<()> {

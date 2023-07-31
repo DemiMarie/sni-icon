@@ -12,8 +12,11 @@ use sni_icon::{IconData, ServerEvent};
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
-    bincode::encode_into_std_write(s, &mut out, bincode::config::standard())
-        .expect("Cannot write to stdout");
+    let v = bincode::encode_to_vec(s, bincode::config::standard()).expect("Cannot encode data");
+    eprintln!("Sending {} bytes", v.len());
+    out.write_all(&((v.len() as u32).to_le_bytes())[..])
+        .expect("cannot write to stdout");
+    out.write_all(&v[..]).expect("cannot write to stdout");
     out.flush().expect("Cannot flush stdout");
 }
 

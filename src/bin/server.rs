@@ -1,4 +1,5 @@
-use dbus::blocking::{Connection, SyncConnection};
+use dbus::nonblock::{LocalConnection, LocalMsgMatch, Proxy};
+use dbus_tokio::connection;
 
 use dbus::message::SignalArgs;
 use dbus::strings::{BusName, Path};
@@ -14,8 +15,14 @@ use sni_icon::client::menu::Dbusmenu;
 use sni_icon::client::watcher::StatusNotifierWatcher;
 use sni_icon::*;
 
+use core::cell::Cell;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::Mutex;
+
+use crate::client::watcher::StatusNotifierWatcherStatusNotifierItemRegistered;
+use futures_util::TryFutureExt as _;
+use tokio::io::AsyncReadExt;
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
@@ -27,38 +34,73 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
     out.flush().expect("Cannot flush stdout");
 }
 
-fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, (String, Option<dbus::Path>)>>>) {
-    let mut stdin = std::io::stdin().lock();
-    let c = Connection::new_session().unwrap();
+async fn reader(
+    reverse_name_map: Rc<RefCell<HashMap<u64, (String, Option<dbus::Path<'_>>)>>>,
+    c: Arc<LocalConnection>,
+) {
+    let mut stdin = tokio::io::stdin();
     loop {
-        let item: sni_icon::IconServerEvent =
-            bincode::decode_from_std_read(&mut stdin, bincode::config::standard()).unwrap();
+        let size = stdin.read_u32_le().await.expect("error reading from stdin");
+        eprintln!("Got something on stdin: length {}!", size);
+        if size > 0x80_000_000 {
+            panic!("Excessive message size {}", size);
+        }
+        let mut buffer = vec![0; size as _];
+        let bytes_read = stdin
+            .read_exact(&mut buffer[..])
+            .await
+            .expect("error reading from stdin");
+        assert_eq!(bytes_read, buffer.len());
+        eprintln!("{} bytes read!", bytes_read);
+        let (item, size): (sni_icon::IconServerEvent, usize) =
+            bincode::decode_from_slice(&mut buffer[..], bincode::config::standard())
+                .expect("malformed message");
+        if size != buffer.len() {
+            panic!(
+                "Malformed message on stdin: got {} bytes but expected {}",
+                buffer.len(),
+                size
+            );
+        }
+        drop(buffer);
         eprintln!("->server {:?}", item);
-        if let Some((pathname, _)) = reverse_name_map.lock().unwrap().get(&item.id) {
+        if let Some((pathname, _)) = reverse_name_map.borrow().get(&item.id) {
             let (bus_name, object_path) = match pathname.find('/') {
                 None => (&pathname[..], "/StatusNotifierItem"),
                 Some(position) => pathname.split_at(position),
             };
             // bus name and object path validated on map entry insertion,
             // no further validation required
-            let icon = c.with_proxy(bus_name, object_path, Duration::from_millis(1000));
+            let icon = Proxy::new(bus_name, object_path, Duration::from_millis(1000), &*c);
 
             match item.event {
-                ServerEvent::Activate { x, y } => icon.activate(x, y).unwrap_or_else(|e| {
-                    eprintln!("->server error {:?}", e);
-                }),
-                ServerEvent::SecondaryActivate { x, y } => {
-                    icon.secondary_activate(x, y).unwrap_or_else(|e| {
-                        eprintln!("->server error {:?}", e);
-                    })
+                ServerEvent::Activate { x, y } => {
+                    icon.activate(x, y)
+                        .unwrap_or_else(|e| {
+                            eprintln!("->server error {:?}", e);
+                        })
+                        .await
                 }
-                ServerEvent::ContextMenu { x, y } => icon.context_menu(x, y).unwrap_or_else(|e| {
-                    eprintln!("->server error {:?}", e);
-                }),
+                ServerEvent::SecondaryActivate { x, y } => {
+                    icon.secondary_activate(x, y)
+                        .unwrap_or_else(|e| {
+                            eprintln!("->server error {:?}", e);
+                        })
+                        .await
+                }
+                ServerEvent::ContextMenu { x, y } => {
+                    icon.context_menu(x, y)
+                        .unwrap_or_else(|e| {
+                            eprintln!("->server error {:?}", e);
+                        })
+                        .await
+                }
                 ServerEvent::Scroll { delta, orientation } => {
-                    icon.scroll(delta, &orientation).unwrap_or_else(|e| {
-                        eprintln!("->server error {:?}", e);
-                    })
+                    icon.scroll(delta, &orientation)
+                        .unwrap_or_else(|e| {
+                            eprintln!("->server error {:?}", e);
+                        })
+                        .await
                 }
             }
         }
@@ -82,321 +124,318 @@ impl dbus::arg::ReadAll for NameOwnerChanged {
     }
 }
 
-impl dbus::message::SignalArgs for NameOwnerChanged {
-    const NAME: &'static str = "NameOwnerChanged";
-    const INTERFACE: &'static str = "org.freedesktop.DBus";
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let local_set = tokio::task::LocalSet::new();
+
+    // Let's start by starting up a connection to the session bus and request a name.
+    let (resource, c) = connection::new_session_local().unwrap();
+    local_set.spawn_local(resource);
+    let _x = local_set.spawn_local(client_server(c));
+    Ok(local_set.await)
+}
+thread_local! {
+    static ID: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+struct IconStats {
+    id: u64,
+    state: Cell<u8>,
+    path: Path<'static>,
+    menu: Option<Path<'static>>,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    // Let's start by starting up a connection to the session bus and request a name.
-    let c = SyncConnection::new_session()?;
+fn handle_cb(
+    msg: Message,
+    c: Arc<LocalConnection>,
+    flag: IconType,
+    name_map: Rc<RefCell<HashMap<String, IconStats>>>,
+) -> () {
+    let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
+    {
+        let nm = name_map.borrow();
+        let nm = match nm.get(&fullpath) {
+            Some(state) if state.state.get() & (flag as u8) != 0 => state,
+            _ => return,
+        };
+        nm.state.set(flag as u8 | nm.state.get());
+    }
+    let name_map_ = name_map.clone();
+    tokio::task::spawn_local(async move {
+        let icon = Proxy::new(
+            msg.sender().unwrap(),
+            msg.path().unwrap(),
+            Duration::from_millis(1000),
+            &*c,
+        );
+        let nm = name_map_.borrow();
+        let nm = match nm.get(&fullpath) {
+            Some(state) => state,
+            _ => return,
+        };
+        nm.state.set(flag as u8 | nm.state.get());
+        match flag {
+            IconType::Normal | IconType::Overlay | IconType::Attention => {
+                if let Ok(icon_pixmap) = icon.icon_pixmap().await {
+                    nm.state.set(!(flag as u8) | nm.state.get());
+                    send_or_panic(IconClientEvent {
+                        id: nm.id,
+                        event: ClientEvent::Icon {
+                            typ: flag,
+                            data: icon_pixmap
+                                .into_iter()
+                                .map(|(w, h, data)| IconData {
+                                    width: w as u32,
+                                    height: h as u32,
+                                    data: data,
+                                })
+                                .collect(),
+                        },
+                    })
+                } else if let Ok(_icon_name) = icon.icon_name().await {
+                    nm.state.set(!(flag as u8) | nm.state.get());
+                } else {
+                    nm.state.set(!(flag as u8) | nm.state.get());
+                    send_or_panic(IconClientEvent {
+                        id: nm.id,
+                        event: ClientEvent::RemoveIcon(flag),
+                    })
+                }
+            }
+            IconType::Title => {
+                let title = icon.title().await;
+                nm.state.set(!(flag as u8) | nm.state.get());
+                send_or_panic(IconClientEvent {
+                    id: nm.id,
+                    event: ClientEvent::Title(title.ok()),
+                })
+            }
 
-    let bus_watcher = c.with_proxy(
+            IconType::Status => {
+                let status = icon.status().await;
+                nm.state.set(!(flag as u8) | nm.state.get());
+                send_or_panic(IconClientEvent {
+                    id: nm.id,
+                    event: ClientEvent::Status(status.ok()),
+                })
+            }
+        }
+    });
+}
+
+async fn client_server(
+    c: Arc<LocalConnection>,
+) -> Result<(LocalMsgMatch, LocalMsgMatch), Box<dyn Error>> {
+    let _bus_watcher = Proxy::new(
         "org.freedesktop.DBus",
         "/org/freedesktop/DBus",
         Duration::from_millis(1000),
+        c.clone(),
     );
 
-    let watcher = c.with_proxy(
+    let watcher = Proxy::new(
         "org.kde.StatusNotifierWatcher",
         "/StatusNotifierWatcher",
         Duration::from_millis(1000),
+        c.clone(),
     );
-
-    let name_map = Arc::new(Mutex::new(HashMap::<String, (u64, Option<Path>)>::new()));
-    let reverse_name_map = Arc::new(Mutex::new(HashMap::<u64, (String, Option<Path>)>::new()));
+    eprintln!("Created watcher proxy!");
+    let name_map = Rc::new(RefCell::new(HashMap::<String, IconStats>::new()));
+    let reverse_name_map = Rc::new(RefCell::new(HashMap::<u64, (String, Option<Path>)>::new()));
     let reverse_name_map_ = reverse_name_map.clone();
-    std::thread::spawn(move || reader(reverse_name_map_));
-
-    let mut index = 0;
+    tokio::task::spawn_local(reader(reverse_name_map_, c.clone()));
+    eprintln!("Spawned reader future!");
+    let c_ = c.clone();
     let name_map_ = name_map.clone();
-    c.add_match(
-        client::item::StatusNotifierItemNewTitle::match_rule(None, None),
-        move |_: client::item::StatusNotifierItemNewIcon, c, msg| {
-            let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
-            let icon = c.with_proxy(
-                msg.sender().unwrap(),
-                msg.path().unwrap(),
-                Duration::from_millis(1000),
-            );
-            let nm = name_map_.lock().unwrap();
-            if let Some(&(id, _)) = nm.get(&fullpath) {
-                send_or_panic(IconClientEvent {
-                    id,
-                    event: ClientEvent::Title(icon.title().ok()),
-                })
-            }
-            true
-        },
-    )?;
+    c.add_match(client::item::StatusNotifierItemNewStatus::match_rule(
+        None, None,
+    ))
+    .await?
+    .cb(move |msg, _: ()| {
+        handle_cb(msg, c_.clone(), IconType::Status, name_map_.clone());
+        true
+    });
+    eprintln!("Added status match!");
+    let c_ = c.clone();
     let name_map_ = name_map.clone();
-    c.add_match(
-        client::item::StatusNotifierItemNewIcon::match_rule(None, None),
-        move |_: client::item::StatusNotifierItemNewIcon, c, msg| {
-            let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
-            let icon = c.with_proxy(
-                msg.sender().unwrap(),
-                msg.path().unwrap(),
-                Duration::from_millis(1000),
-            );
-            let nm = name_map_.lock().unwrap();
-            if let Some((nm, _)) = nm.get(&fullpath) {
-                if let Ok(icon_pixmap) = icon.icon_pixmap() {
-                    send_or_panic(IconClientEvent {
-                        id: nm.clone(),
-                        event: ClientEvent::Icon {
-                            typ: IconType::Normal,
-                            data: icon_pixmap
-                                .into_iter()
-                                .map(|(w, h, data)| IconData {
-                                    width: w as u32,
-                                    height: h as u32,
-                                    data: data,
-                                })
-                                .collect(),
-                        },
-                    })
-                } else if let Ok(icon_name) = icon.icon_name() {
-                } else {
-                    send_or_panic(IconClientEvent {
-                        id: nm.clone(),
-                        event: ClientEvent::RemoveIcon(IconType::Normal),
-                    })
-                }
-            }
-            true
-        },
-    )?;
-    let name_map_ = name_map.clone();
-    c.add_match(
-        client::item::StatusNotifierItemNewAttentionIcon::match_rule(None, None),
-        move |_: client::item::StatusNotifierItemNewAttentionIcon, c, msg| {
-            let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
-            let icon = c.with_proxy(
-                msg.sender().unwrap(),
-                msg.path().unwrap(),
-                Duration::from_millis(1000),
-            );
-            let nm = name_map_.lock().unwrap();
-            if let Some((nm, _)) = nm.get(&fullpath) {
-                if let Ok(icon_pixmap) = icon.attention_icon_pixmap() {
-                    send_or_panic(IconClientEvent {
-                        id: nm.clone(),
-                        event: ClientEvent::Icon {
-                            typ: IconType::Attention,
-                            data: icon_pixmap
-                                .into_iter()
-                                .map(|(w, h, data)| IconData {
-                                    width: w as u32,
-                                    height: h as u32,
-                                    data: data,
-                                })
-                                .collect(),
-                        },
-                    })
-                } else {
-                    send_or_panic(IconClientEvent {
-                        id: nm.clone(),
-                        event: ClientEvent::RemoveIcon(IconType::Attention),
-                    })
-                }
-            }
-            true
-        },
-    )?;
-    let name_map_ = name_map.clone();
-    c.add_match(
-        client::item::StatusNotifierItemNewOverlayIcon::match_rule(None, None),
-        move |_: client::item::StatusNotifierItemNewOverlayIcon, c, msg| {
-            let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
-            let icon = c.with_proxy(
-                msg.sender().unwrap(),
-                msg.path().unwrap(),
-                Duration::from_millis(1000),
-            );
-            let nm = name_map_.lock().unwrap();
-            if let Some((nm, _)) = nm.get(&fullpath) {
-                let id = *nm;
-                if let Ok(icon_pixmap) = icon.overlay_icon_pixmap() {
-                    send_or_panic(IconClientEvent {
-                        id,
-                        event: ClientEvent::Icon {
-                            typ: IconType::Overlay,
-                            data: icon_pixmap
-                                .into_iter()
-                                .map(|(w, h, data)| IconData {
-                                    width: w as u32,
-                                    height: h as u32,
-                                    data: data,
-                                })
-                                .collect(),
-                        },
-                    })
-                } else {
-                    send_or_panic(IconClientEvent {
-                        id,
-                        event: ClientEvent::RemoveIcon(IconType::Overlay),
-                    })
-                }
-            }
-            true
-        },
-    )?;
-    let name_map_ = name_map.clone();
-    c.add_match(
-        client::item::StatusNotifierItemNewStatus::match_rule(None, None),
-        move |_: client::item::StatusNotifierItemNewIcon, c, msg| {
-            let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
-            let icon = c.with_proxy(
-                msg.sender().unwrap(),
-                msg.path().unwrap(),
-                Duration::from_millis(1000),
-            );
-            let nm = name_map_.lock().unwrap();
+    c.add_match(client::item::StatusNotifierItemNewTitle::match_rule(
+        None, None,
+    ))
+    .await?
+    .cb(move |msg, _: ()| {
+        handle_cb(msg, c_.clone(), IconType::Title, name_map_.clone());
+        true
+    });
 
-            if let Some((id, _)) = nm.get(&fullpath) {
-                send_or_panic(IconClientEvent {
-                    id: *id,
-                    event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
-                })
-            }
-            true
-        },
-    )?;
-
-    let name_map_ = name_map.clone();
-    let reverse_name_map_ = reverse_name_map.clone();
-    let mut go =
-        move |item: String, c: &SyncConnection| -> Result<(), Box<dyn std::error::Error>> {
-            eprintln!("Going!");
-            let (bus_name, object_path) = match item.find('/') {
-                None => (&item[..], "/StatusNotifierItem"),
-                Some(position) => item.split_at(position),
-            };
-            let bus_name = BusName::new(bus_name)?;
-            let object_path = Path::new(object_path)?;
-            let icon = c.with_proxy(bus_name.clone(), object_path, Duration::from_millis(1000));
-            let app_id = icon.id()?;
-            if app_id.starts_with("org.qubes-os.vm.") {
-                return Ok(());
-            }
-            let category = icon.category()?;
-            let menu = match icon.menu() {
-                Ok(p) => Some(p),
-                Err(e) => match e.name() {
-                    Some("org.freedesktop.DBus.Error.NoSuchProperty") => None,
-                    _ => return Err(e.into()),
-                },
-            };
-            match &menu {
-                Some(m) => {
-                    let menu = c.with_proxy(bus_name.clone(), m, Duration::from_millis(1000));
-                    let layout = menu.get_layout(0, -1, vec![])?;
-                    eprintln!("Layout: {:?}", layout);
-                }
-                None => {}
-            }
-            index += 1;
-            let id = index;
-            eprintln!("Got new object {:?}, id {}", &item, id);
-            send_or_panic(IconClientEvent {
-                id,
-                event: ClientEvent::Create {
-                    category,
-                    app_id,
-                    has_menu: menu.is_some(),
-                },
-            });
-            name_map_
-                .lock()
-                .expect("poisoned?")
-                .insert(bus_name.to_string(), (id, menu.clone()));
-            eprintln!(
-                "Create event sent, {:?} added to reverse name map",
-                &bus_name.to_string()
-            );
-            reverse_name_map_.lock().unwrap().insert(id, (item, menu));
-
-            send_or_panic(IconClientEvent {
-                id,
-                event: ClientEvent::Status(StatusNotifierItem::status(&icon).ok()),
-            });
-
-            for (ty, fun) in [
-                (IconType::Normal, icon.icon_pixmap()),
-                (IconType::Attention, icon.attention_icon_pixmap()),
-                (IconType::Overlay, icon.overlay_icon_pixmap()),
-            ] {
-                if let Ok(icon_pixmap) = fun {
-                    send_or_panic(IconClientEvent {
-                        id,
-                        event: ClientEvent::Icon {
-                            typ: ty,
-                            data: icon_pixmap
-                                .into_iter()
-                                .map(|(w, h, data)| IconData {
-                                    width: w as u32,
-                                    height: h as u32,
-                                    data: data,
-                                })
-                                .collect(),
-                        },
-                    })
-                }
-            }
-
-            eprintln!("Returning from go()");
-            Ok::<(), _>(())
+    async fn go(
+        item: String,
+        c: Arc<LocalConnection>,
+        name_map: Rc<RefCell<HashMap<String, IconStats>>>,
+        reverse_name_map: Rc<RefCell<HashMap<u64, (String, Option<Path<'static>>)>>>,
+    ) -> Result<(), Box<dyn Error>> {
+        eprintln!("Going!");
+        let (bus_name, object_path) = match item.find('/') {
+            None => (&item[..], "/StatusNotifierItem"),
+            Some(position) => item.split_at(position),
         };
-
-    for item in watcher.registered_status_notifier_items()? {
-        go(item, &c)?
-    }
-
-    let handle_notifier =
-        move |arg: client::watcher::StatusNotifierWatcherStatusNotifierItemRegistered,
-              c: &SyncConnection,
-              _msg: &Message|
-              -> bool {
-            eprintln!("Picked up registered event");
-            let _ = go(arg.arg0, c);
-            true
-        };
-
-    let handle_name_lost = move |NameOwnerChanged {
-                                     name,
-                                     old_owner,
-                                     new_owner,
-                                 },
-                                 _c: &SyncConnection,
-                                 _msg: &Message|
-          -> bool {
-        eprintln!("Name {:?} lost", &name);
-        if old_owner.is_empty() || !new_owner.is_empty() {
-            return true;
+        eprintln!(
+            "Bus name is {:?}, object path is {:?}",
+            bus_name, object_path
+        );
+        let bus_name = BusName::new(bus_name)?;
+        let object_path = Path::new(object_path)?;
+        let icon = Proxy::new(
+            bus_name.clone(),
+            object_path.clone(),
+            Duration::from_millis(1000),
+            c,
+        );
+        let (app_id, category, menu, status) =
+            futures_util::join!(icon.id(), icon.category(), icon.menu(), icon.status());
+        let app_id = app_id?;
+        if app_id.starts_with("org.qubes_os.vm.") {
+            return Result::<(), Box<dyn std::error::Error>>::Ok(());
         }
-        let id = match name_map.lock().expect("poisoned?").remove(&name) {
-            Some(i) => i.0,
-            None => return true,
+        let category = category?;
+        let menu = match menu {
+            Ok(p) => Some(p),
+            Err(e) => match e.name() {
+                Some("org.freedesktop.DBus.Error.NoSuchProperty") => None,
+                _ => return Err(e.into()),
+            },
         };
-        eprintln!("Name {} lost, destroying icon {}", &name, id);
-        reverse_name_map
-            .lock()
-            .unwrap()
-            .remove(&id)
-            .expect("reverse and forward maps inconsistent");
+        match &menu {
+            Some(_m) => {
+                // let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c);
+                // let layout = menu.get_layout(0, -1, vec![])?;
+                // eprintln!("Layout: {:?}", layout);
+            }
+            None => {}
+        }
+        let id = ID.with(|id| id.get()) + 1;
+        ID.with(|x| x.set(id));
+        eprintln!("Got new object {:?}, id {}", &item, id);
         send_or_panic(IconClientEvent {
             id,
-            event: ClientEvent::Destroy,
+            event: ClientEvent::Create {
+                category,
+                app_id,
+                has_menu: menu.is_some(),
+            },
         });
+        name_map.borrow_mut().insert(
+            bus_name.to_string(),
+            IconStats {
+                id,
+                state: Cell::new(0),
+                path: object_path,
+                menu: menu.clone(),
+            },
+        );
+        eprintln!(
+            "Create event sent, {:?} added to reverse name map",
+            &bus_name.to_string()
+        );
+        reverse_name_map.borrow_mut().insert(id, (item, menu));
+
+        send_or_panic(IconClientEvent {
+            id,
+            event: ClientEvent::Status(status.ok()),
+        });
+
+        let (normal, attention, overlay) = futures_util::join!(
+            icon.icon_pixmap(),
+            icon.attention_icon_pixmap(),
+            icon.overlay_icon_pixmap()
+        );
+        for (ty, fun) in [
+            (IconType::Normal, normal),
+            (IconType::Attention, attention),
+            (IconType::Overlay, overlay),
+        ] {
+            if let Ok(icon_pixmap) = fun {
+                send_or_panic(IconClientEvent {
+                    id,
+                    event: ClientEvent::Icon {
+                        typ: ty,
+                        data: icon_pixmap
+                            .into_iter()
+                            .map(|(w, h, data)| IconData {
+                                width: w as u32,
+                                height: h as u32,
+                                data: data,
+                            })
+                            .collect(),
+                    },
+                })
+            }
+        }
+
+        eprintln!("Returning from go()");
+        Ok::<(), _>(())
+    }
+
+    for item in watcher.registered_status_notifier_items().await? {
+        tokio::task::spawn_local(go(
+            item,
+            c.clone(),
+            name_map.clone(),
+            reverse_name_map.clone(),
+        ));
+    }
+
+    let c_ = c.clone();
+    let (name_map_, reverse_name_map_) = (name_map.clone(), reverse_name_map.clone());
+    let handle_notifier = move |_msg: Message, (s,): (String,)| -> bool {
+        eprintln!("Picked up registered event");
+        tokio::task::spawn_local(go(
+            s,
+            c_.clone(),
+            name_map_.clone(),
+            reverse_name_map_.clone(),
+        ));
         true
     };
 
-    watcher.match_signal(handle_notifier)?;
+    let matcher1 = c
+        .add_match(StatusNotifierWatcherStatusNotifierItemRegistered::match_rule(None, None))
+        .await?
+        .cb(handle_notifier);
+    let x = dbus::message::MatchRule::new_signal("org.freedesktop.DBus\0", "NameOwnerChanged\0")
+        .with_strict_sender("org.freedesktop.DBus\0")
+        .with_path("/org/freedesktop/DBus\0");
+    let matcher2 = c
+        .add_match(x)
+        .await?
+        .cb(move |m, n| handle_name_lost(m, n, name_map.clone(), reverse_name_map.clone()));
+    Ok((matcher1, matcher2))
+}
 
-    bus_watcher.match_signal(handle_name_lost)?;
-
-    loop {
-        c.process(Duration::from_millis(1000))?;
+fn handle_name_lost(
+    _msg: Message,
+    NameOwnerChanged {
+        name,
+        old_owner,
+        new_owner,
+    }: NameOwnerChanged,
+    name_map: Rc<RefCell<HashMap<String, IconStats>>>,
+    reverse_name_map: Rc<RefCell<HashMap<u64, (String, Option<Path<'static>>)>>>,
+) -> bool {
+    eprintln!("Name {:?} lost", &name);
+    if old_owner.is_empty() || !new_owner.is_empty() {
+        return true;
     }
+    let id = match name_map.borrow_mut().remove(&name) {
+        Some(i) => i.id,
+        None => return true,
+    };
+    eprintln!("Name {} lost, destroying icon {}", &name, id);
+    reverse_name_map
+        .borrow_mut()
+        .remove(&id)
+        .expect("reverse and forward maps inconsistent");
+    send_or_panic(IconClientEvent {
+        id,
+        event: ClientEvent::Destroy,
+    });
+    true
 }

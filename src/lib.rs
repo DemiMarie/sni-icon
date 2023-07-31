@@ -1,11 +1,14 @@
 pub mod client;
 pub mod server;
 
-#[derive(Debug, bincode::Decode, bincode::Encode)]
+#[derive(Debug, bincode::Decode, bincode::Encode, Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
 pub enum IconType {
-    Normal,
-    Overlay,
-    Attention,
+    Normal = 1,
+    Overlay = 2,
+    Attention = 4,
+    Status = 8,
+    Title = 16,
 }
 
 #[derive(Debug, bincode::Decode, bincode::Encode)]
