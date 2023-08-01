@@ -211,7 +211,7 @@ fn handle_cb(
             }
 
             IconType::Status => {
-                let status = icon.status().await;
+                let status = StatusNotifierItem::status(&icon).await;
                 nm.state.set(!(flag as u8) | nm.state.get());
                 send_or_panic(IconClientEvent {
                     id: nm.id,
@@ -287,10 +287,14 @@ async fn client_server(
             bus_name.clone(),
             object_path.clone(),
             Duration::from_millis(1000),
-            c,
+            c.clone(),
         );
-        let (app_id, category, menu, status) =
-            futures_util::join!(icon.id(), icon.category(), icon.menu(), icon.status());
+        let (app_id, category, menu, status) = futures_util::join!(
+            icon.id(),
+            icon.category(),
+            icon.menu(),
+            StatusNotifierItem::status(&icon)
+        );
         let app_id = app_id?;
         if app_id.starts_with("org.qubes_os.vm.") {
             return Result::<(), Box<dyn std::error::Error>>::Ok(());
@@ -304,10 +308,10 @@ async fn client_server(
             },
         };
         match &menu {
-            Some(_m) => {
-                // let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c);
-                // let layout = menu.get_layout(0, -1, vec![])?;
-                // eprintln!("Layout: {:?}", layout);
+            Some(m) => {
+                let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c);
+                let layout = menu.get_layout(0, -1, vec![]).await?;
+                eprintln!("Layout: {:?}", layout);
             }
             None => {}
         }
