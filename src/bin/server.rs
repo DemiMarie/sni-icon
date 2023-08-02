@@ -1,8 +1,9 @@
 use dbus::nonblock::{LocalConnection, LocalMsgMatch, Proxy};
 use dbus_tokio::connection;
 
+use dbus::arg::{ArgType, Iter};
 use dbus::message::SignalArgs;
-use dbus::strings::{BusName, Path};
+use dbus::strings::{BusName, Path, Signature};
 use dbus::Message;
 
 use std::collections::HashMap;
@@ -112,6 +113,227 @@ pub struct NameOwnerChanged {
     pub name: String,
     pub old_owner: String,
     pub new_owner: String,
+}
+#[derive(Debug)]
+struct Menu {
+    revision: u32,
+    layout: MenuEntries,
+}
+#[derive(Debug)]
+struct MenuEntries(DBusMenuEntry);
+impl dbus::arg::Arg for MenuEntries {
+    const ARG_TYPE: ArgType = ArgType::Struct;
+    fn signature() -> Signature<'static> {
+        // SAFETY: The string is a valid D-Bus signature and is NUL-terminated.
+        unsafe { Signature::from_slice_unchecked("(ia{sv}av)\0") }
+    }
+}
+
+impl<'a> dbus::arg::Get<'a> for MenuEntries {
+    fn get(i: &mut Iter<'a>) -> Option<Self> {
+        eprintln!("Calling MenuEntries::get");
+        let mut x = i.recurse(ArgType::Struct)?;
+        eprintln!("Recursed into first struct");
+
+        let id: i32 = x.get()?;
+        assert!(x.next());
+        eprintln!("Got ID {}", id);
+        let mut properties: Iter<'a> = x.recurse(ArgType::Array)?;
+        eprintln!("Entered properties dict");
+        let mut entry_counter = 0;
+        let mut is_separator = None;
+        let mut label: Option<String> = None;
+        let mut enabled: Option<bool> = None;
+        let mut visible: Option<bool> = None;
+        let mut children_display: Option<bool> = None;
+        let mut has_next = true;
+        let mut disposition: Option<Disposition> = None;
+
+        while has_next {
+            let mut dict_entry = properties.recurse(ArgType::DictEntry)?;
+            has_next = properties.next();
+            eprintln!("Found a dict entry");
+            entry_counter += 1;
+            let prop_name: String = dict_entry.get()?;
+            eprintln!("Propery name is {prop_name:?}");
+            assert!(dict_entry.next());
+            let mut variant_value = dict_entry.recurse(ArgType::Variant)?;
+            eprintln!("Property value is {variant_value:?}");
+            match &*prop_name {
+                "type" => {
+                    // string: "standard" or "separator"
+                    if is_separator
+                        .replace(match &*variant_value.get::<String>()? {
+                            "standard" => false,
+                            "separator" => true,
+                            _ => {
+                                eprintln!("Invalid entry type");
+                                return None;
+                            }
+                        })
+                        .is_some()
+                    {
+                        eprintln!("Multiple type values not allowed");
+                        return None;
+                    }
+                }
+                "label" => {
+                    // string, with special handling of underscores
+                    if label.replace(variant_value.get()?).is_some() {
+                        eprintln!("Multiple labels not allowed");
+                        return None;
+                    }
+                }
+                "enabled" => {
+                    // boolean - true if item can be activated
+                    if enabled.replace(variant_value.get()?).is_some() {
+                        eprintln!("Multiple enabled values not allowed");
+                        return None;
+                    }
+                }
+                "visible" => {
+                    // boolean - true if item is visible
+                    if visible.replace(variant_value.get()?).is_some() {
+                        eprintln!("Multiple visible values not allowed");
+                        return None;
+                    }
+                }
+                "icon-name" => {} // string - icon name
+                "icon-data" => { // bytes - PNG icon data
+                     // FIXME: does this need to be decompressed in the guest or can
+                     // the PNG crate on the host be trusted with malicious PNG?
+                }
+                "shortcut" => {
+                    // array of length-2 arrays of strings - shortcut keys
+                    let mut outer_array = variant_value.recurse(ArgType::Array)?;
+                    let mut has_next = true;
+                    while has_next {
+                        let mut inner_array = outer_array.recurse(ArgType::Array)?;
+                        has_next = outer_array.next();
+                        let _s1: String = inner_array.get()?;
+                        if !inner_array.next() {
+                            return None;
+                        }
+                        let _s2: String = inner_array.get()?;
+                        if inner_array.next() {
+                            return None;
+                        }
+                    }
+                }
+                "toggle-type" => {
+                    // string, either "checkmark", "radio", or "" (not togglable)
+                    match &*variant_value.get::<String>()? {
+                        "checkmark" | "radio" | "" => {}
+                        _ => {
+                            eprintln!("Invalid toggle type");
+                            return None;
+                        }
+                    }
+                }
+                "toggle-state" => {
+                    // integer (i32), either 0 (not toggled), 1 (toggled), or
+                    // something else (indeterminate), default -1
+                }
+                "children-display" => {
+                    eprintln!("children-display set");
+                    // "submenu" if there are children, otherwise ""
+                    if children_display
+                        .replace(match &*variant_value.get::<String>()? {
+                            "submenu" => true,
+                            "" => false,
+                            _ => {
+                                eprintln!("Invalid submenu type");
+                                return None;
+                            }
+                        })
+                        .is_some()
+                    {
+                        eprintln!("children-display occurs twice");
+                        return None;
+                    }
+                }
+                "disposition" => {
+                    if disposition
+                        .replace(match &*variant_value.get::<String>()? {
+                            "normal" => Disposition::Normal,
+                            "informative" => Disposition::Informative,
+                            "warning" => Disposition::Warning,
+                            "alert" => Disposition::Alert,
+                            _ => {
+                                eprintln!("Invalid disposition");
+                                return None;
+                            }
+                        })
+                        .is_some()
+                    {
+                        eprintln!("Cannot specify disposition more than once");
+                        return None;
+                    }
+                } // "normal", "informative", "warning", or "alert"
+                x if x.starts_with("x-") => {} // ignored, but valid
+                x => eprintln!("Invalid property name {:?}", x),
+            }
+        }
+
+        eprintln!("All properties read");
+        if !x.next() {
+            eprintln!("No subentry array");
+            return None;
+        }
+        let mut subentries: Iter<'a> = x.recurse(ArgType::Array)?;
+        let mut children = vec![];
+        if children_display.unwrap_or(false) {
+            eprintln!(
+                "Processing submenus, content of type {:?}",
+                subentries.arg_type()
+            );
+            has_next = true;
+            while has_next {
+                let mut submenu = subentries.recurse(ArgType::Variant)?;
+                has_next = subentries.next();
+                eprintln!("Entered variant, content of type {:?}", submenu.arg_type());
+                children.push(Self::get(&mut submenu)?.0);
+            }
+        } else if subentries.next() {
+            eprintln!("Submenu entries but submenu-display not set");
+            return None;
+        }
+
+        if i.next() {
+            return None;
+        }
+
+        if is_separator.unwrap_or(false) {
+            if entry_counter != if visible.is_some() { 2 } else { 1 } {
+                eprintln!("Separators must not have properties other than \u{201c}visible\u{201d}");
+                return None;
+            }
+
+            return Some(MenuEntries(DBusMenuEntry::Separator {
+                visible: visible.unwrap_or(true),
+            }));
+        } else {
+            return Some(MenuEntries(DBusMenuEntry::Standard {
+                label: label.unwrap_or_else(String::new),
+                access_key: None,
+                visible: visible.unwrap_or(false),
+                children,
+                disposition: disposition.unwrap_or(Disposition::Normal),
+                id: None,
+                depth: 0,
+                parent: None,
+            }));
+        }
+    }
+}
+
+impl dbus::arg::ReadAll for Menu {
+    fn read(i: &mut dbus::arg::Iter<'_>) -> Result<Self, dbus::arg::TypeMismatchError> {
+        Ok(Self {
+            revision: i.read()?,
+            layout: i.read()?,
+        })
+    }
 }
 
 impl dbus::arg::ReadAll for NameOwnerChanged {
@@ -310,8 +532,18 @@ async fn client_server(
         match &menu {
             Some(m) => {
                 let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c);
-                let layout = menu.get_layout(0, -1, vec![]).await?;
-                eprintln!("Layout: {:?}", layout);
+                eprintln!("Issuing method call!");
+                let iter: Result<Menu, _> = menu
+                    .method_call(
+                        "com.canonical.dbusmenu",
+                        "GetLayout",
+                        (0i32, -1i32, Vec::<&str>::new()),
+                    )
+                    .await;
+
+                eprintln!("{:?}", iter);
+
+                // eprintln!("Menu layout: revision={revision}, parent_id={parent_id}, properties={properties:?}, recursive={recursive:?}");
             }
             None => {}
         }

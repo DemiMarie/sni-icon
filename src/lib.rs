@@ -22,19 +22,16 @@ pub enum IconType {
 #[derive(Debug, bincode::Decode, bincode::Encode)]
 pub enum DBusMenuEntry {
     /// Separator
-    Separator,
+    Separator { visible: bool },
     /// Standard
     Standard {
-        /// The type of this entry.
-        ty: MenuEntryType,
         /// Label
         label: String,
         /// Access key
         access_key: Option<core::num::NonZeroU8>,
         /// Whether this entry is enabled.
         /// Not used.
-        #[cfg(any())]
-        enabled: bool,
+        visible: bool,
         #[cfg(any())]
         /// Icon name, must be sanitized.  Not used.
         icon_name: String,
