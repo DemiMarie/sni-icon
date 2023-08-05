@@ -125,7 +125,8 @@ pub enum ClientEvent {
     RemoveTooltip,
 
     EnableMenu {
-        entries: Vec<DBusMenuEntry>,
+        revision: u32,
+        entries: DBusMenuEntry,
     },
 }
 
