@@ -577,6 +577,15 @@ async fn client_server(
             event: ClientEvent::Status(status.ok()),
         });
 
+        if let Some(menu) = menu_object {
+            send_or_panic(IconClientEvent {
+                id,
+                event: ClientEvent::EnableMenu {
+                    revision: menu.revision,
+                    entries: menu.layout.0,
+                },
+            });
+        }
         let (normal, attention, overlay) = futures_util::join!(
             icon.icon_pixmap(),
             icon.attention_icon_pixmap(),

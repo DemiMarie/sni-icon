@@ -310,7 +310,9 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                     }
                     outer_ni.remove(&item.id).expect("Removed nonexistent ID?");
                 }
-                ClientEvent::EnableMenu { .. } => todo!("Not sent by server yet"),
+                ClientEvent::EnableMenu { .. } => {
+                    eprintln!("D-Bus menu enabled!");
+                }
             }
         }
     }
