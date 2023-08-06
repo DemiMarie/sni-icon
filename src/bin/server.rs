@@ -2,7 +2,7 @@ use dbus::nonblock::{LocalConnection, LocalMsgMatch, Proxy};
 use dbus_tokio::connection;
 
 use dbus::arg::{ArgType, Iter};
-use dbus::message::SignalArgs;
+use dbus::message::{MatchRule, SignalArgs};
 use dbus::strings::{BusName, Path, Signature};
 use dbus::Message;
 
@@ -368,7 +368,7 @@ struct IconStats {
     id: u64,
     state: Cell<u8>,
     path: Path<'static>,
-    menu: Option<Path<'static>>,
+    menu: Option<(LocalMsgMatch, Path<'static>)>,
 }
 
 fn handle_cb(
@@ -527,25 +527,26 @@ async fn client_server(
                 _ => return Err(e.into()),
             },
         };
-        let menu_object = match &menu {
+        let (initial_layout, match_rule) = match &menu {
             Some(m) => {
-                let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c);
+                let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c.clone());
 
                 eprintln!("Issuing method call!");
-                let iter: Result<Menu, _> = menu
-                    .method_call(
+
+                let (iter, match_rule): (Result<Menu, _>, _) = futures_util::join!(
+                    menu.method_call(
                         interface_com_canonical_dbusmenu(),
                         get_layout(),
                         (0i32, -1i32, Vec::<&str>::new()),
-                    )
-                    .await;
+                    ),
+                    c.add_match(layout_updated(bus_name.clone(), object_path.clone()))
+                );
 
                 eprintln!("Got menu!");
-                Some(iter?)
+                (Some(iter?), Some(match_rule?))
             }
-            None => None,
+            None => (None, None),
         };
-        let x = layout_updated(bus_name.clone(), object_path.clone());
         let id = ID.with(|id| id.get()) + 1;
         ID.with(|x| x.set(id));
         eprintln!("Got new object {:?}, id {}", &item, id);
@@ -554,16 +555,25 @@ async fn client_server(
             event: ClientEvent::Create {
                 category,
                 app_id,
-                has_menu: menu.is_some(),
+                has_menu: initial_layout.is_some(),
             },
         });
+        if let Some(menu) = initial_layout {
+            send_or_panic(IconClientEvent {
+                id,
+                event: ClientEvent::EnableMenu {
+                    revision: menu.revision,
+                    entries: menu.layout.0,
+                },
+            });
+        }
         name_map.borrow_mut().insert(
             bus_name.to_string(),
             IconStats {
                 id,
                 state: Cell::new(0),
                 path: object_path,
-                menu: menu.clone(),
+                menu: menu.clone().map(|x| (match_rule.unwrap(), x)),
             },
         );
         eprintln!(
@@ -576,16 +586,6 @@ async fn client_server(
             id,
             event: ClientEvent::Status(status.ok()),
         });
-
-        if let Some(menu) = menu_object {
-            send_or_panic(IconClientEvent {
-                id,
-                event: ClientEvent::EnableMenu {
-                    revision: menu.revision,
-                    entries: menu.layout.0,
-                },
-            });
-        }
         let (normal, attention, overlay) = futures_util::join!(
             icon.icon_pixmap(),
             icon.attention_icon_pixmap(),
@@ -650,11 +650,12 @@ async fn client_server(
     let matcher2 = c
         .add_match(x)
         .await?
-        .cb(move |m, n| handle_name_lost(m, n, name_map.clone(), reverse_name_map.clone()));
+        .cb(move |m, n| handle_name_lost(&c, m, n, name_map.clone(), reverse_name_map.clone()));
     Ok((matcher1, matcher2))
 }
 
 fn handle_name_lost(
+    c: &Arc<LocalConnection>,
     _msg: Message,
     NameOwnerChanged {
         name,
@@ -669,7 +670,17 @@ fn handle_name_lost(
         return true;
     }
     let id = match name_map.borrow_mut().remove(&name) {
-        Some(i) => i.id,
+        Some(mut stats) => {
+            if let Some((menu_info, _)) = stats.menu.take() {
+                let c = c.clone();
+                tokio::task::spawn_local(async move {
+                    c.remove_match(menu_info.token())
+                        .await
+                        .expect("cannot remove match")
+                });
+            }
+            stats.id
+        }
         None => return true,
     };
     eprintln!("Name {} lost, destroying icon {}", &name, id);

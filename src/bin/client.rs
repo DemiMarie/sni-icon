@@ -290,7 +290,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                         Some(sni_icon::Tooltip {
                             title,
                             description,
-                            icon_data: icon_data,
+                            icon_data,
                         }),
                         &c,
                     );
@@ -310,8 +310,8 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                     }
                     outer_ni.remove(&item.id).expect("Removed nonexistent ID?");
                 }
-                ClientEvent::EnableMenu { .. } => {
-                    eprintln!("D-Bus menu enabled!");
+                ClientEvent::EnableMenu { revision, entries } => {
+                    eprintln!("D-Bus menu enabled! Revision {revision}, entries {entries:?}");
                 }
             }
         }
