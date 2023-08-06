@@ -14,6 +14,7 @@ use std::time::Duration;
 use sni_icon::client::item::StatusNotifierItem;
 use sni_icon::client::menu::Dbusmenu;
 use sni_icon::client::watcher::StatusNotifierWatcher;
+use sni_icon::names::*;
 use sni_icon::*;
 
 use core::cell::Cell;
@@ -451,16 +452,9 @@ fn handle_cb(
 async fn client_server(
     c: Arc<LocalConnection>,
 ) -> Result<(LocalMsgMatch, LocalMsgMatch), Box<dyn Error>> {
-    let _bus_watcher = Proxy::new(
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        Duration::from_millis(1000),
-        c.clone(),
-    );
-
     let watcher = Proxy::new(
-        "org.kde.StatusNotifierWatcher",
-        "/StatusNotifierWatcher",
+        name_status_notifier_watcher(),
+        path_status_notifier_watcher(),
         Duration::from_millis(1000),
         c.clone(),
     );
@@ -536,11 +530,12 @@ async fn client_server(
         let menu_object = match &menu {
             Some(m) => {
                 let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c);
+
                 eprintln!("Issuing method call!");
                 let iter: Result<Menu, _> = menu
                     .method_call(
-                        "com.canonical.dbusmenu",
-                        "GetLayout",
+                        interface_com_canonical_dbusmenu(),
+                        get_layout(),
                         (0i32, -1i32, Vec::<&str>::new()),
                     )
                     .await;
@@ -550,6 +545,7 @@ async fn client_server(
             }
             None => None,
         };
+        let x = layout_updated(bus_name.clone(), object_path.clone());
         let id = ID.with(|id| id.get()) + 1;
         ID.with(|x| x.set(id));
         eprintln!("Got new object {:?}, id {}", &item, id);
@@ -639,9 +635,9 @@ async fn client_server(
         .add_match(StatusNotifierWatcherStatusNotifierItemRegistered::match_rule(None, None))
         .await?
         .cb(handle_notifier);
-    let x = dbus::message::MatchRule::new_signal("org.freedesktop.DBus\0", "NameOwnerChanged\0")
-        .with_strict_sender("org.freedesktop.DBus\0")
-        .with_path("/org/freedesktop/DBus\0");
+    let x = dbus::message::MatchRule::new_signal(interface_dbus(), name_owner_changed())
+        .with_strict_sender(name_dbus())
+        .with_path(path_dbus());
     let matcher2 = c
         .add_match(x)
         .await?

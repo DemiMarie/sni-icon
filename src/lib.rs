@@ -1,4 +1,5 @@
 pub mod client;
+pub mod names;
 pub mod server;
 use std::rc::Rc;
 
