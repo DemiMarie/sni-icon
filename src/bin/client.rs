@@ -12,7 +12,7 @@ use std::error::Error;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-use sni_icon::{server, ClientEvent, IconType};
+use sni_icon::{names, server, ClientEvent, IconType};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -90,8 +90,8 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
     );
 
     let watcher = Proxy::new(
-        "org.kde.StatusNotifierWatcher",
-        "/StatusNotifierWatcher",
+        names::name_status_notifier_watcher(),
+        names::path_status_notifier_watcher(),
         Duration::from_millis(1000),
         c.clone(),
     );
@@ -221,8 +221,8 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             eprintln!("Registering name {:?}", name);
             watcher
                 .method_call(
-                    "org.kde.StatusNotifierWatcher",
-                    "RegisterStatusNotifierItem",
+                    names::interface_status_notifier_watcher(),
+                    names::register_status_notifier_item(),
                     (format!("{}/{}", name, item.id),),
                 )
                 .await

@@ -37,6 +37,10 @@ pub fn name_status_notifier_watcher() -> BusName<'static> {
     unsafe { BusName::from_slice_unchecked("org.kde.StatusNotifierWatcher\0") }
 }
 
+pub fn interface_status_notifier_watcher() -> Interface<'static> {
+    // SAFETY: this is a valid NUL-terminated interface name
+    unsafe { Interface::from_slice_unchecked("org.kde.StatusNotifierWatcher\0") }
+}
 pub fn layout_updated<'a, 'b: 'a, 'c: 'a>(
     b: BusName<'b>,
     p: Path<'c>,
@@ -51,4 +55,9 @@ pub fn layout_updated<'a, 'b: 'a, 'c: 'a>(
 pub fn path_status_notifier_watcher() -> Path<'static> {
     // SAFETY: this is a valid NUL-terminated path name
     unsafe { Path::from_slice_unchecked("/StatusNotifierWatcher\0") }
+}
+
+pub fn register_status_notifier_item() -> Member<'static> {
+    // SAFETY: this is a valid NUL-terminated path name
+    unsafe { Member::from_slice_unchecked("RegisterStatusNotifierItem\0") }
 }
