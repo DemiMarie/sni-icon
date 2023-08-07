@@ -206,7 +206,11 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 item.id,
                 app_id,
                 category.clone(),
-                if has_menu { Some(vec![]) } else { None },
+                if has_menu {
+                    Some(Default::default())
+                } else {
+                    None
+                },
             );
             items.borrow_mut().insert(item.id, notifier);
             {

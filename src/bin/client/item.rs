@@ -6,12 +6,11 @@ use dbus::nonblock::LocalConnection as Connection;
 use dbus::strings::{ErrorName, Path};
 use dbus::MethodErr;
 use sni_icon::{server, IconServerEvent};
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::Write as _;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
-use sni_icon::{Event, IconData, ServerEvent};
+use sni_icon::{DBusMenuEntry, Event, IconData, ServerEvent};
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
@@ -37,16 +36,43 @@ pub(super) struct NotifierIcon {
     attention_icon: Option<Vec<IconData>>,
     overlay_icon: Option<Vec<IconData>>,
 
-    has_menu: Option<Vec<sni_icon::DBusMenuEntry>>,
+    has_menu: Option<Menu>,
 }
 
-struct MenuEntry {
-    data: Vec<Rc<MenuEntry>>,
-    ids: Vec<(i32, Weak<MenuEntry>)>,
+#[derive(Default, Debug)]
+pub(super) struct Menu {
     revision: u32,
+    cache: HashMap<i32, Rc<RefCell<DBusMenuEntry>>>,
+    data: Vec<Rc<DBusMenuEntry>>,
 }
-struct Menu {
-    entries: HashMap<i32, Rc<RefCell<MenuEntry>>>,
+impl Menu {
+    fn about_to_show(&self, id: i32) -> Result<bool, dbus::MethodErr> {
+        Err(dbus::MethodErr::failed(&*format!(
+            "not yet implemented: grabbing id {}",
+            id
+        )))
+    }
+    fn event(
+        &mut self,
+        _id: i32,
+        event_id: std::string::String,
+        _data: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
+        _timestamp: u32,
+    ) -> Result<(), MethodErr> {
+        let _event = match &*event_id {
+            "clicked" => Event::Clicked,
+            "opened" => Event::Opened,
+            "hovered" => Event::Hovered,
+            "closed" => Event::Closed,
+            invalid => {
+                return Err(dbus::MethodErr::invalid_arg(&*format!(
+                    "bad event {}",
+                    invalid
+                )))
+            }
+        };
+        Err(dbus::MethodErr::failed("not yet implemented"))
+    }
 }
 
 pub(super) fn bus_path(id: u64) -> dbus::Path<'static> {
@@ -54,12 +80,7 @@ pub(super) fn bus_path(id: u64) -> dbus::Path<'static> {
 }
 
 impl NotifierIcon {
-    pub fn new(
-        id: u64,
-        app_id: String,
-        category: String,
-        has_menu: Option<Vec<sni_icon::DBusMenuEntry>>,
-    ) -> Self {
+    pub fn new(id: u64, app_id: String, category: String, has_menu: Option<Menu>) -> Self {
         Self {
             id,
             app_id,
@@ -125,40 +146,11 @@ impl NotifierIcon {
             .unwrap();
     }
 
-    fn about_to_show(&self, id: i32) -> Result<bool, dbus::MethodErr> {
-        Err(dbus::MethodErr::failed("not yet implemented"))
-    }
-
-    fn contains_id(&self, _: i32) -> bool {
-        return false;
-    }
-
     fn get_property(
         &self,
         _id: i32,
         _name: String,
     ) -> Result<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>, dbus::MethodErr> {
-        Err(dbus::MethodErr::failed("not yet implemented"))
-    }
-    fn event(
-        &mut self,
-        _id: i32,
-        event_id: std::string::String,
-        _data: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
-        _timestamp: u32,
-    ) -> Result<(), MethodErr> {
-        let _event = match &*event_id {
-            "clicked" => Event::Clicked,
-            "opened" => Event::Opened,
-            "hovered" => Event::Hovered,
-            "closed" => Event::Closed,
-            invalid => {
-                return Err(dbus::MethodErr::invalid_arg(&*format!(
-                    "bad event {}",
-                    invalid
-                )))
-            }
-        };
         Err(dbus::MethodErr::failed("not yet implemented"))
     }
 
@@ -185,7 +177,12 @@ impl NotifierIcon {
             )));
         }
 
-        if parent_id != 0 && !self.contains_id(parent_id) {
+        let menu = match self.has_menu {
+            None => return Err(dbus::MethodErr::failed("no menu for item")),
+            Some(ref menu) => menu,
+        };
+
+        if parent_id != 0 && !menu.cache.contains_key(&parent_id) {
             return Err(dbus::MethodErr::failed(&*format!(
                 "no item with id {}",
                 parent_id
@@ -196,7 +193,10 @@ impl NotifierIcon {
             recursion_depth = 8; // Avoid D-Bus depth limits.
         }
 
-        Err(dbus::MethodErr::failed("not yet implemented"))
+        Err(dbus::MethodErr::failed(&*format!(
+            "not yet implemented: recursion depth {}",
+            recursion_depth,
+        )))
     }
 }
 
@@ -449,9 +449,15 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         call_with_icon(|icon| {
             let mut not_found = vec![];
             let mut found_something = false;
+
+            let menu = match icon.has_menu {
+                None => return Err(dbus::MethodErr::failed("no menu for item")),
+                Some(ref mut menu) => menu,
+            };
+
             for (id, event_id, data, timestamp) in events.into_iter() {
-                if icon.contains_id(id) {
-                    icon.event(id, event_id, data, timestamp)?;
+                if menu.cache.contains_key(&id) {
+                    menu.event(id, event_id, data, timestamp)?;
                     found_something = true;
                 } else {
                     not_found.push(id)
@@ -465,16 +471,33 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         })
     }
     fn about_to_show(&mut self, id: i32) -> Result<bool, MethodErr> {
-        call_with_icon(|icon| icon.about_to_show(id))
+        call_with_icon(|icon| {
+            let menu = match icon.has_menu {
+                None => return Err(dbus::MethodErr::failed("no menu for item")),
+                Some(ref menu) => menu,
+            };
+
+            if !menu.cache.contains_key(&id) {
+                return Err(dbus::MethodErr::failed(&*format!("no item with id {}", id)));
+            }
+
+            menu.about_to_show(id)
+        })
     }
     fn about_to_show_group(&mut self, ids: Vec<i32>) -> Result<(Vec<i32>, Vec<i32>), MethodErr> {
         call_with_icon(|icon| {
             let mut not_found = vec![];
             let mut invalidated = vec![];
             let mut found_something = false;
+
+            let menu = match icon.has_menu {
+                None => return Err(dbus::MethodErr::failed("no menu for item")),
+                Some(ref menu) => menu,
+            };
+
             for &id in &*ids {
-                if icon.contains_id(id) {
-                    if icon.about_to_show(id)? {
+                if menu.cache.contains_key(&id) {
+                    if menu.about_to_show(id)? {
                         invalidated.push(id)
                     }
                     found_something = true;
