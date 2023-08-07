@@ -149,6 +149,25 @@ impl NotifierIcon {
     ) -> Result<(), MethodErr> {
         Err(dbus::MethodErr::failed("not yet implemented"))
     }
+
+    fn get_layout(
+        &mut self,
+        parent_id: i32,
+        recursion_depth: i32,
+        property_names: Vec<std::string::String>,
+    ) -> Result<
+        (
+            u32,
+            (
+                i32,
+                HashMap<std::string::String, dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
+                Vec<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>>,
+            ),
+        ),
+        MethodErr,
+    > {
+        Err(dbus::MethodErr::failed("not yet implemented"))
+    }
 }
 
 pub(super) struct NotifierIconWrapper;
@@ -336,7 +355,7 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         ),
         MethodErr,
     > {
-        call_with_icon(|icon| Err(dbus::MethodErr::failed("not yet implemented")))
+        call_with_icon(|icon| icon.get_layout(parent_id, recursion_depth, property_names))
     }
     fn get_group_properties(
         &mut self,
