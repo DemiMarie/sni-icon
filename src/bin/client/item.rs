@@ -43,7 +43,7 @@ pub(super) struct NotifierIcon {
 pub(super) struct Menu {
     revision: u32,
     cache: HashMap<i32, Rc<RefCell<DBusMenuEntry>>>,
-    data: Vec<Rc<DBusMenuEntry>>,
+    data: Vec<Rc<RefCell<DBusMenuEntry>>>,
 }
 impl Menu {
     fn about_to_show(&self, id: i32) -> Result<bool, dbus::MethodErr> {
