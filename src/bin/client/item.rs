@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::Write as _;
 use std::rc::{Rc, Weak};
 
-use sni_icon::{IconData, ServerEvent};
+use sni_icon::{Event, IconData, ServerEvent};
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
@@ -142,18 +142,30 @@ impl NotifierIcon {
     }
     fn event(
         &mut self,
-        _: i32,
-        _: std::string::String,
-        _: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
-        _: u32,
+        _id: i32,
+        event_id: std::string::String,
+        _data: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
+        _timestamp: u32,
     ) -> Result<(), MethodErr> {
+        let _event = match &*event_id {
+            "clicked" => Event::Clicked,
+            "opened" => Event::Opened,
+            "hovered" => Event::Hovered,
+            "closed" => Event::Closed,
+            invalid => {
+                return Err(dbus::MethodErr::invalid_arg(&*format!(
+                    "bad event {}",
+                    invalid
+                )))
+            }
+        };
         Err(dbus::MethodErr::failed("not yet implemented"))
     }
 
     fn get_layout(
         &mut self,
         parent_id: i32,
-        recursion_depth: i32,
+        mut recursion_depth: i32,
         property_names: Vec<std::string::String>,
     ) -> Result<
         (
@@ -166,6 +178,24 @@ impl NotifierIcon {
         ),
         MethodErr,
     > {
+        if recursion_depth < -1 {
+            return Err(dbus::MethodErr::invalid_arg(&*format!(
+                "depth {} is invalid as it is less than -1",
+                recursion_depth
+            )));
+        }
+
+        if parent_id != 0 && !self.contains_id(parent_id) {
+            return Err(dbus::MethodErr::failed(&*format!(
+                "no item with id {}",
+                parent_id
+            )));
+        }
+
+        if recursion_depth == -1 || recursion_depth > 8 {
+            recursion_depth = 8; // Avoid D-Bus depth limits.
+        }
+
         Err(dbus::MethodErr::failed("not yet implemented"))
     }
 }

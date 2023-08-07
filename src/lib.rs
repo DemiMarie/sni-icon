@@ -13,6 +13,15 @@ pub enum IconType {
     Title = 16,
 }
 
+#[derive(Debug, bincode::Decode, bincode::Encode, Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
+pub enum Event {
+    Clicked,
+    Hovered,
+    Opened,
+    Closed,
+}
+
 /// The following checks are used during insertion to ensure that the tree
 /// invariants are maintained:
 ///
