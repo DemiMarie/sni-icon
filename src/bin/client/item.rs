@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use dbus::arg::RefArg;
 use dbus::channel::Sender as _;
 use dbus::message::SignalArgs;
@@ -5,8 +6,10 @@ use dbus::nonblock::LocalConnection as Connection;
 use dbus::strings::{ErrorName, Path};
 use dbus::MethodErr;
 use sni_icon::{server, IconServerEvent};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::Write as _;
+use std::rc::{Rc, Weak};
 
 use sni_icon::{IconData, ServerEvent};
 
@@ -34,7 +37,16 @@ pub(super) struct NotifierIcon {
     attention_icon: Option<Vec<IconData>>,
     overlay_icon: Option<Vec<IconData>>,
 
-    has_menu: bool,
+    has_menu: Option<Vec<sni_icon::DBusMenuEntry>>,
+}
+
+struct MenuEntry {
+    data: Vec<Rc<MenuEntry>>,
+    ids: Vec<(i32, Weak<MenuEntry>)>,
+    revision: u32,
+}
+struct Menu {
+    entries: HashMap<i32, Rc<RefCell<MenuEntry>>>,
 }
 
 pub(super) fn bus_path(id: u64) -> dbus::Path<'static> {
@@ -42,7 +54,12 @@ pub(super) fn bus_path(id: u64) -> dbus::Path<'static> {
 }
 
 impl NotifierIcon {
-    pub fn new(id: u64, app_id: String, category: String, has_menu: bool) -> Self {
+    pub fn new(
+        id: u64,
+        app_id: String,
+        category: String,
+        has_menu: Option<Vec<sni_icon::DBusMenuEntry>>,
+    ) -> Self {
         Self {
             id,
             app_id,
@@ -106,6 +123,31 @@ impl NotifierIcon {
         connection
             .send((server::item::StatusNotifierItemNewOverlayIcon {}).to_emit_message(&self.path))
             .unwrap();
+    }
+
+    fn about_to_show(&self, id: i32) -> bool {
+        todo!()
+    }
+
+    fn contains_id(&self, _: i32) -> bool {
+        return false;
+    }
+
+    fn get_property(
+        &self,
+        _id: i32,
+        _name: String,
+    ) -> Result<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>, dbus::MethodErr> {
+        todo!()
+    }
+    fn event(
+        &mut self,
+        _: i32,
+        _: std::string::String,
+        _: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
+        _: u32,
+    ) -> Result<(), MethodErr> {
+        todo!()
     }
 }
 
@@ -193,8 +235,9 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         Err(dbus::MethodErr::no_property("icon_theme_path"))
     }
     fn menu(&self) -> Result<dbus::Path<'static>, dbus::MethodErr> {
+        eprintln!("menu() called!");
         call_with_icon(|icon| {
-            if icon.has_menu {
+            if icon.has_menu.is_some() {
                 Ok(icon.path.clone())
             } else {
                 Err(dbus::MethodErr::no_property("menu"))
@@ -202,7 +245,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         })
     }
     fn item_is_menu(&self) -> Result<bool, dbus::MethodErr> {
-        Ok(false)
+        call_with_icon(|icon| Ok(icon.has_menu.is_some()))
     }
     fn icon_name(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("IconName"))
@@ -279,9 +322,9 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
 impl server::menu::Dbusmenu for NotifierIconWrapper {
     fn get_layout(
         &mut self,
-        _: i32,
-        _: i32,
-        _: Vec<std::string::String>,
+        parent_id: i32,
+        recursion_depth: i32,
+        property_names: Vec<std::string::String>,
     ) -> Result<
         (
             u32,
@@ -293,12 +336,14 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         ),
         MethodErr,
     > {
-        Err(dbus::MethodErr::failed("GetLayout"))
+        call_with_icon(|icon| {
+            Err(dbus::MethodErr::failed("not yet implemented"))
+        })
     }
     fn get_group_properties(
         &mut self,
-        _: Vec<i32>,
-        _: Vec<std::string::String>,
+        ids: Vec<i32>,
+        property_names: Vec<std::string::String>,
     ) -> Result<
         Vec<(
             i32,
@@ -306,14 +351,32 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         )>,
         MethodErr,
     > {
-        todo!()
+        call_with_icon(|icon| {
+            let mut out_vec = Vec::new();
+            for id in &*ids {
+                let id = *id;
+                let mut out = HashMap::new();
+                for property_name in &*property_names {
+                    out.insert(
+                        property_name.clone(),
+                        icon.get_property(id, property_name.clone())?,
+                    );
+                }
+                out_vec.push((id, out));
+            }
+            if out_vec.is_empty() {
+                return Err(dbus::MethodErr::failed("No matching IDs"));
+            } else {
+                return Ok(out_vec);
+            }
+        })
     }
     fn get_property(
         &mut self,
-        _: i32,
-        _: std::string::String,
+        id: i32,
+        name: std::string::String,
     ) -> Result<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>, MethodErr> {
-        todo!()
+        call_with_icon(|icon| icon.get_property(id, name))
     }
     fn event(
         &mut self,
@@ -322,24 +385,64 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         _: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
         _: u32,
     ) -> Result<(), MethodErr> {
-        todo!()
+        call_with_icon(|icon| {
+            eprintln!("Got an event!");
+            Ok(())
+        })
     }
     fn event_group(
         &mut self,
-        _: Vec<(
+        events: Vec<(
             i32,
             std::string::String,
             dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
             u32,
         )>,
     ) -> Result<Vec<i32>, MethodErr> {
-        todo!()
+        call_with_icon(|icon| {
+            let mut not_found = vec![];
+            let mut found_something = false;
+            for (id, event_id, data, timestamp) in events.into_iter() {
+                if icon.contains_id(id) {
+                    icon.event(id, event_id, data, timestamp)?;
+                    found_something = true;
+                } else {
+                    not_found.push(id)
+                }
+            }
+            if !found_something {
+                return Err(dbus::MethodErr::failed("No matching IDs"));
+            } else {
+                return Ok(not_found);
+            }
+        })
     }
     fn about_to_show(&mut self, _: i32) -> Result<bool, MethodErr> {
-        todo!()
+        call_with_icon(|icon| todo!())
     }
-    fn about_to_show_group(&mut self, _: Vec<i32>) -> Result<(Vec<i32>, Vec<i32>), MethodErr> {
-        todo!()
+    fn about_to_show_group(&mut self, ids: Vec<i32>) -> Result<(Vec<i32>, Vec<i32>), MethodErr> {
+        call_with_icon(|icon| {
+            let mut not_found = vec![];
+            let mut invalidated = vec![];
+            let mut found_something = false;
+            for &id in &*ids {
+                if icon.contains_id(id) {
+                    if icon.about_to_show(id) {
+                        invalidated.push(id)
+                    }
+                    found_something = true;
+                } else {
+                    not_found.push(id)
+                }
+            }
+            if !found_something {
+                return Err(dbus::MethodErr::failed(
+                    "No entry found with any of the ID numbers",
+                ));
+            } else {
+                return Ok((invalidated, not_found));
+            }
+        })
     }
     fn version(&self) -> Result<u32, MethodErr> {
         Ok(1)

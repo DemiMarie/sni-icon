@@ -1,6 +1,5 @@
 #[path = "client/item.rs"]
 mod item;
-
 use dbus::channel::MatchingReceiver;
 use dbus::nonblock::Proxy;
 
@@ -203,7 +202,12 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 .await
                 .expect("Cannot acquire bus name {name}?");
 
-            let notifier = NotifierIcon::new(item.id, app_id, category.clone(), has_menu);
+            let notifier = NotifierIcon::new(
+                item.id,
+                app_id,
+                category.clone(),
+                if has_menu { Some(vec![]) } else { None },
+            );
             items.borrow_mut().insert(item.id, notifier);
             {
                 let mut cr = cr_.borrow_mut();

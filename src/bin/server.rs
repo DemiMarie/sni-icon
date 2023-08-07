@@ -559,6 +559,7 @@ async fn client_server(
             },
         });
         if let Some(menu) = initial_layout {
+            eprintln!("Enabling menu!");
             send_or_panic(IconClientEvent {
                 id,
                 event: ClientEvent::EnableMenu {
