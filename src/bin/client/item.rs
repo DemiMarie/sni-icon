@@ -125,8 +125,8 @@ impl NotifierIcon {
             .unwrap();
     }
 
-    fn about_to_show(&self, id: i32) -> bool {
-        todo!()
+    fn about_to_show(&self, id: i32) -> Result<bool, dbus::MethodErr> {
+        Err(dbus::MethodErr::failed("not yet implemented"))
     }
 
     fn contains_id(&self, _: i32) -> bool {
@@ -138,7 +138,7 @@ impl NotifierIcon {
         _id: i32,
         _name: String,
     ) -> Result<dbus::arg::Variant<Box<(dyn RefArg + 'static)>>, dbus::MethodErr> {
-        todo!()
+        Err(dbus::MethodErr::failed("not yet implemented"))
     }
     fn event(
         &mut self,
@@ -147,7 +147,7 @@ impl NotifierIcon {
         _: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
         _: u32,
     ) -> Result<(), MethodErr> {
-        todo!()
+        Err(dbus::MethodErr::failed("not yet implemented"))
     }
 }
 
@@ -336,9 +336,7 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         ),
         MethodErr,
     > {
-        call_with_icon(|icon| {
-            Err(dbus::MethodErr::failed("not yet implemented"))
-        })
+        call_with_icon(|icon| Err(dbus::MethodErr::failed("not yet implemented")))
     }
     fn get_group_properties(
         &mut self,
@@ -417,8 +415,8 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
             }
         })
     }
-    fn about_to_show(&mut self, _: i32) -> Result<bool, MethodErr> {
-        call_with_icon(|icon| todo!())
+    fn about_to_show(&mut self, id: i32) -> Result<bool, MethodErr> {
+        call_with_icon(|icon| icon.about_to_show(id))
     }
     fn about_to_show_group(&mut self, ids: Vec<i32>) -> Result<(Vec<i32>, Vec<i32>), MethodErr> {
         call_with_icon(|icon| {
@@ -427,7 +425,7 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
             let mut found_something = false;
             for &id in &*ids {
                 if icon.contains_id(id) {
-                    if icon.about_to_show(id) {
+                    if icon.about_to_show(id)? {
                         invalidated.push(id)
                     }
                     found_something = true;
