@@ -72,21 +72,27 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
     let (resource, c) = connection::new_session_local().unwrap();
     tokio::task::spawn_local(async { panic!("D-Bus connection lost: {}", resource.await) });
     let pid = std::process::id();
-    let cr = Rc::new(RefCell::new(Crossroads::new()));
-    let cr_ = cr.clone();
-    c.start_receive(
-        dbus::message::MatchRule::new_method_call(),
-        Box::new(move |msg, conn| {
-            let path = msg
-                .path()
-                .expect("Method call with no path should have been rejected by libdbus");
-            if let Some(id) = parse_dest(&path, &"/", &"/StatusNotifierItem") {
-                ID.with(|id_| id_.set(id))
-            }
-            cr.borrow_mut().handle_message(msg, conn).unwrap();
-            true
-        }),
-    );
+    let cr_only_sni = Rc::new(RefCell::new(Crossroads::new()));
+    let cr_sni_menu = Rc::new(RefCell::new(Crossroads::new()));
+    {
+        let iface_token_1 = server::item::register_status_notifier_item::<NotifierIconWrapper>(
+            &mut *cr_only_sni.borrow_mut(),
+        );
+        let iface_token_2 = server::item::register_status_notifier_item::<NotifierIconWrapper>(
+            &mut *cr_sni_menu.borrow_mut(),
+        );
+        let iface_token_3 =
+            server::menu::register_dbusmenu::<NotifierIconWrapper>(&mut *cr_sni_menu.borrow_mut());
+        let bus_name = names::path_status_notifier_item();
+        cr_only_sni
+            .borrow_mut()
+            .insert(bus_name.clone(), &[iface_token_1], NotifierIconWrapper);
+        cr_sni_menu.borrow_mut().insert(
+            bus_name,
+            &[iface_token_2, iface_token_3],
+            NotifierIconWrapper,
+        );
+    }
 
     let watcher = Proxy::new(
         names::name_status_notifier_watcher(),
@@ -198,10 +204,12 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             };
 
             eprintln!("Registering new item {}, app id is {:?}", &name, app_id);
-            c.request_name(name.clone(), false, true, true)
-                .await
-                .expect("Cannot acquire bus name {name}?");
 
+            let cr_ = if has_menu {
+                cr_sni_menu.clone()
+            } else {
+                cr_only_sni.clone()
+            };
             let notifier = NotifierIcon::new(
                 item.id,
                 app_id,
@@ -211,27 +219,16 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 } else {
                     None
                 },
+                cr_.clone(),
             );
+            let path = notifier.bus_path();
             items.borrow_mut().insert(item.id, notifier);
-            {
-                let mut cr = cr_.borrow_mut();
-                let iface_token =
-                    server::item::register_status_notifier_item::<NotifierIconWrapper>(&mut *cr);
-                let bus_name = format!("/{}/StatusNotifierItem", item.id);
-                if has_menu {
-                    let iface_token_2 =
-                        server::menu::register_dbusmenu::<NotifierIconWrapper>(&mut *cr);
-                    cr.insert(bus_name, &[iface_token, iface_token_2], NotifierIconWrapper);
-                } else {
-                    cr.insert(bus_name, &[iface_token], NotifierIconWrapper);
-                }
-            }
             eprintln!("Registering name {:?}", name);
             watcher
                 .method_call(
                     names::interface_status_notifier_watcher(),
                     names::register_status_notifier_item(),
-                    (format!("{}/{}", name, item.id),),
+                    (format!("{}", path),),
                 )
                 .await
                 .expect("Could not register status notifier item")
@@ -241,10 +238,10 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             match item.event {
                 ClientEvent::Create { .. } => unreachable!(),
                 ClientEvent::Title(title) => {
-                    ni.set_title(title, &c);
+                    ni.set_title(title);
                 }
                 ClientEvent::Status(status) => {
-                    ni.set_status(status, &c);
+                    ni.set_status(status);
                 }
                 ClientEvent::Icon { typ, mut data } => {
                     for item in &mut data {
@@ -272,21 +269,21 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                     }
                     match typ {
                         IconType::Normal => {
-                            ni.set_icon(Some(data), &c);
+                            ni.set_icon(Some(data));
                         }
                         IconType::Attention => {
-                            ni.set_attention_icon(Some(data), &c);
+                            ni.set_attention_icon(Some(data));
                         }
                         IconType::Overlay => {
-                            ni.set_overlay_icon(Some(data), &c);
+                            ni.set_overlay_icon(Some(data));
                         }
                         IconType::Title | IconType::Status => panic!("guest sent bad icon type"),
                     }
                 }
                 ClientEvent::RemoveIcon(typ) => match typ {
-                    IconType::Normal => ni.set_icon(None, &c),
-                    IconType::Attention => ni.set_attention_icon(None, &c),
-                    IconType::Overlay => ni.set_overlay_icon(None, &c),
+                    IconType::Normal => ni.set_icon(None),
+                    IconType::Attention => ni.set_attention_icon(None),
+                    IconType::Overlay => ni.set_overlay_icon(None),
                     IconType::Title | IconType::Status => panic!("guest sent bad icon type"),
                 },
                 ClientEvent::Tooltip {
@@ -294,17 +291,14 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                     title,
                     description,
                 } => {
-                    ni.set_tooltip(
-                        Some(sni_icon::Tooltip {
-                            title,
-                            description,
-                            icon_data,
-                        }),
-                        &c,
-                    );
+                    ni.set_tooltip(Some(sni_icon::Tooltip {
+                        title,
+                        description,
+                        icon_data,
+                    }));
                 }
                 ClientEvent::RemoveTooltip => {
-                    ni.set_tooltip(None, &c);
+                    ni.set_tooltip(None);
                 }
 
                 ClientEvent::Destroy => {
@@ -313,9 +307,6 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                         .await
                         .expect("Cannot release bus name?");
                     eprintln!("Released bus name {name}");
-                    {
-                        cr_.borrow_mut().remove::<()>(&item::bus_path(item.id));
-                    }
                     outer_ni.remove(&item.id).expect("Removed nonexistent ID?");
                 }
                 ClientEvent::EnableMenu { revision, entries } => {

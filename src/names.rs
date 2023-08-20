@@ -62,3 +62,8 @@ pub fn register_status_notifier_item() -> Member<'static> {
     // SAFETY: this is a valid NUL-terminated member name
     unsafe { Member::from_slice_unchecked("RegisterStatusNotifierItem\0") }
 }
+
+pub fn path_status_notifier_item() -> Path<'static> {
+    // SAFETY: this is a valid NUL-terminated path name
+    unsafe { Path::from_slice_unchecked("/StatusNotifierItem\0") }
+}

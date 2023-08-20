@@ -1,16 +1,21 @@
 use core::cell::RefCell;
 use dbus::arg::RefArg;
-use dbus::channel::Sender as _;
+use dbus::channel::{MatchingReceiver as _, Sender as _};
 use dbus::message::SignalArgs;
 use dbus::nonblock::LocalConnection as Connection;
-use dbus::strings::{ErrorName, Path};
+use dbus::strings::{BusName, ErrorName, Path};
 use dbus::MethodErr;
+use dbus_crossroads::Crossroads;
+use futures_util::future::{AbortHandle, Abortable};
 use sni_icon::{server, IconServerEvent};
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::rc::Rc;
+use std::sync::Arc;
 
-use sni_icon::{DBusMenuEntry, Event, IconData, ServerEvent};
+use sni_icon::{
+    names::path_status_notifier_item as path, DBusMenuEntry, Event, IconData, ServerEvent,
+};
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
@@ -24,7 +29,7 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
 
 pub(super) struct NotifierIcon {
     id: u64,
-    path: Path<'static>,
+    connection: Arc<Connection>,
     category: String,
     app_id: String,
 
@@ -37,6 +42,13 @@ pub(super) struct NotifierIcon {
     overlay_icon: Option<Vec<IconData>>,
 
     has_menu: Option<Menu>,
+    abort_handle: AbortHandle,
+}
+
+impl Drop for NotifierIcon {
+    fn drop(&mut self) {
+        self.abort_handle.abort()
+    }
 }
 
 #[derive(Default, Debug)]
@@ -45,6 +57,7 @@ pub(super) struct Menu {
     cache: HashMap<i32, Rc<RefCell<DBusMenuEntry>>>,
     data: Vec<Rc<RefCell<DBusMenuEntry>>>,
 }
+
 impl Menu {
     fn about_to_show(&self, id: i32) -> Result<bool, dbus::MethodErr> {
         Err(dbus::MethodErr::failed(&*format!(
@@ -75,17 +88,35 @@ impl Menu {
     }
 }
 
-pub(super) fn bus_path(id: u64) -> dbus::Path<'static> {
-    format!("/{}/StatusNotifierItem\0", id).into()
-}
-
 impl NotifierIcon {
-    pub fn new(id: u64, app_id: String, category: String, has_menu: Option<Menu>) -> Self {
+    pub fn new(
+        id: u64,
+        app_id: String,
+        category: String,
+        has_menu: Option<Menu>,
+        cr: Rc<RefCell<Crossroads>>,
+    ) -> Self {
+        let (resource, connection) =
+            dbus_tokio::connection::new_session_local().expect("Cannot connect to session bus");
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        tokio::task::spawn_local(Abortable::new(resource, abort_registration));
+        connection.start_receive(
+            dbus::message::MatchRule::new_method_call(),
+            Box::new(move |msg, conn| {
+                let path = msg
+                    .path()
+                    .expect("Method call with no path should have been rejected by libdbus");
+                super::ID.with(|id_| id_.set(id));
+                cr.borrow_mut().handle_message(msg, conn).unwrap();
+                true
+            }),
+        );
         Self {
             id,
             app_id,
             category,
 
+            connection,
             tooltip: None,
             title: None,
             status: None,
@@ -93,56 +124,51 @@ impl NotifierIcon {
             attention_icon: None,
             overlay_icon: None,
             has_menu,
-            path: bus_path(id),
+            abort_handle,
         }
     }
-    pub fn set_title(&mut self, title: Option<String>, connection: &Connection) {
+    pub fn set_title(&mut self, title: Option<String>) {
         self.title = title;
-        connection
-            .send((server::item::StatusNotifierItemNewTitle {}).to_emit_message(&self.path))
+        self.connection
+            .send((server::item::StatusNotifierItemNewTitle {}).to_emit_message(&path()))
             .unwrap();
     }
-    pub fn set_tooltip(&mut self, tooltip: Option<sni_icon::Tooltip>, connection: &Connection) {
+    pub fn bus_path(&self) -> String {
+        self.connection.unique_name().to_string()
+    }
+    pub fn set_tooltip(&mut self, tooltip: Option<sni_icon::Tooltip>) {
         self.tooltip = tooltip;
-        connection
-            .send((server::item::StatusNotifierItemNewToolTip {}).to_emit_message(&self.path))
+        self.connection
+            .send((server::item::StatusNotifierItemNewToolTip {}).to_emit_message(&path()))
             .unwrap();
     }
-    pub fn set_status(&mut self, status: Option<String>, connection: &Connection) {
+    pub fn set_status(&mut self, status: Option<String>) {
         self.status = status.clone();
-        connection
+        self.connection
             .send(
                 (server::item::StatusNotifierItemNewStatus {
                     status: status.unwrap_or_else(|| "normal".to_owned()),
                 })
-                .to_emit_message(&self.path),
+                .to_emit_message(&path()),
             )
             .unwrap();
     }
-    pub fn set_icon(&mut self, icon: Option<Vec<IconData>>, connection: &Connection) {
+    pub fn set_icon(&mut self, icon: Option<Vec<IconData>>) {
         self.icon = icon;
-        connection
-            .send((server::item::StatusNotifierItemNewIcon {}).to_emit_message(&self.path))
+        self.connection
+            .send((server::item::StatusNotifierItemNewIcon {}).to_emit_message(&path()))
             .unwrap();
     }
-    pub fn set_attention_icon(
-        &mut self,
-        attention_icon: Option<Vec<IconData>>,
-        connection: &Connection,
-    ) {
+    pub fn set_attention_icon(&mut self, attention_icon: Option<Vec<IconData>>) {
         self.attention_icon = attention_icon;
-        connection
-            .send((server::item::StatusNotifierItemNewAttentionIcon {}).to_emit_message(&self.path))
+        self.connection
+            .send((server::item::StatusNotifierItemNewAttentionIcon {}).to_emit_message(&path()))
             .unwrap();
     }
-    pub fn set_overlay_icon(
-        &mut self,
-        overlay_icon: Option<Vec<IconData>>,
-        connection: &Connection,
-    ) {
+    pub fn set_overlay_icon(&mut self, overlay_icon: Option<Vec<IconData>>) {
         self.overlay_icon = overlay_icon;
-        connection
-            .send((server::item::StatusNotifierItemNewOverlayIcon {}).to_emit_message(&self.path))
+        self.connection
+            .send((server::item::StatusNotifierItemNewOverlayIcon {}).to_emit_message(&path()))
             .unwrap();
     }
 
@@ -283,11 +309,11 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
     fn icon_theme_path(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("icon_theme_path"))
     }
-    fn menu(&self) -> Result<dbus::Path<'static>, dbus::MethodErr> {
+    fn menu(&self) -> Result<Path<'static>, dbus::MethodErr> {
         eprintln!("menu() called!");
         call_with_icon(|icon| {
             if icon.has_menu.is_some() {
-                Ok(icon.path.clone())
+                Ok(path())
             } else {
                 Err(dbus::MethodErr::no_property("menu"))
             }

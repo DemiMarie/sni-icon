@@ -315,7 +315,6 @@ fn get(i: &mut Iter, parent: i32, depth: u32) -> Option<MenuEntries> {
     } else {
         return Some(MenuEntries(DBusMenuEntry::Standard {
             label: label.unwrap_or_else(String::new),
-            access_key: None,
             visible: visible.unwrap_or(false),
             children,
             disposition: disposition.unwrap_or(Disposition::Normal),

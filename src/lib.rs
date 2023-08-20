@@ -37,8 +37,6 @@ pub enum DBusMenuEntry {
     Standard {
         /// Label
         label: String,
-        /// Access key
-        access_key: Option<core::num::NonZeroU8>,
         /// Whether this entry is enabled.
         /// Not used.
         visible: bool,
