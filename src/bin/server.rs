@@ -2,7 +2,7 @@ use dbus::nonblock::{LocalConnection, LocalMsgMatch, Proxy};
 use dbus_tokio::connection;
 
 use dbus::arg::{ArgType, Iter};
-use dbus::message::{MatchRule, SignalArgs};
+use dbus::message::{SignalArgs};
 use dbus::strings::{BusName, Path, Signature};
 use dbus::Message;
 
@@ -130,7 +130,7 @@ impl dbus::arg::Arg for MenuEntries {
     }
 }
 
-fn get(i: &mut Iter, parent: i32, depth: u32) -> Option<MenuEntries> {
+fn get(i: &mut Iter, _parent: i32, depth: u32) -> Option<MenuEntries> {
     eprintln!("Calling MenuEntries::get");
     let mut x = i.recurse(ArgType::Struct)?;
     eprintln!("Recursed into first struct");
