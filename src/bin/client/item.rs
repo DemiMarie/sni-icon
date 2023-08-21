@@ -320,7 +320,11 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         })
     }
     fn item_is_menu(&self) -> Result<bool, dbus::MethodErr> {
-        call_with_icon(|icon| Ok(icon.has_menu.is_some()))
+        if cfg!(enable_menu) {
+            call_with_icon(|icon| Ok(icon.has_menu.is_some()))
+        } else {
+            Ok(false)
+        }
     }
     fn icon_name(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("IconName"))
