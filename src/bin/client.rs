@@ -1,6 +1,6 @@
 #[path = "client/item.rs"]
 mod item;
-use dbus::channel::MatchingReceiver;
+
 use dbus::nonblock::Proxy;
 
 use dbus_crossroads::Crossroads;

@@ -3,7 +3,7 @@ use dbus::arg::RefArg;
 use dbus::channel::{MatchingReceiver as _, Sender as _};
 use dbus::message::SignalArgs;
 use dbus::nonblock::LocalConnection as Connection;
-use dbus::strings::{BusName, ErrorName, Path};
+use dbus::strings::{ErrorName, Path};
 use dbus::MethodErr;
 use dbus_crossroads::Crossroads;
 use futures_util::future::{AbortHandle, Abortable};
@@ -103,7 +103,7 @@ impl NotifierIcon {
         connection.start_receive(
             dbus::message::MatchRule::new_method_call(),
             Box::new(move |msg, conn| {
-                let path = msg
+                let _path = msg
                     .path()
                     .expect("Method call with no path should have been rejected by libdbus");
                 super::ID.with(|id_| id_.set(id));
@@ -184,7 +184,7 @@ impl NotifierIcon {
         &mut self,
         parent_id: i32,
         mut recursion_depth: i32,
-        property_names: Vec<std::string::String>,
+        _property_names: Vec<std::string::String>,
     ) -> Result<
         (
             u32,
@@ -462,7 +462,7 @@ impl server::menu::Dbusmenu for NotifierIconWrapper {
         _: dbus::arg::Variant<Box<(dyn RefArg + 'static)>>,
         _: u32,
     ) -> Result<(), MethodErr> {
-        call_with_icon(|icon| {
+        call_with_icon(|_icon| {
             eprintln!("Got an event!");
             Ok(())
         })
