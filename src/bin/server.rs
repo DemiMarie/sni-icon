@@ -1,9 +1,8 @@
 use dbus::nonblock::{LocalConnection, LocalMsgMatch, Proxy};
 use dbus_tokio::connection;
 
-use dbus::arg::{ArgType, Iter};
-use dbus::message::{SignalArgs};
-use dbus::strings::{BusName, Path, Signature};
+use dbus::message::SignalArgs;
+use dbus::strings::{BusName, Path};
 use dbus::Message;
 
 use std::collections::HashMap;
@@ -12,7 +11,6 @@ use std::io::Write;
 use std::time::Duration;
 
 use sni_icon::client::item::StatusNotifierItem;
-use sni_icon::client::menu::Dbusmenu;
 use sni_icon::client::watcher::StatusNotifierWatcher;
 use sni_icon::names::*;
 use sni_icon::*;
@@ -36,10 +34,7 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
     out.flush().expect("Cannot flush stdout");
 }
 
-async fn reader(
-    reverse_name_map: Rc<RefCell<HashMap<u64, (String, Option<dbus::Path<'_>>)>>>,
-    c: Arc<LocalConnection>,
-) {
+async fn reader(reverse_name_map: Rc<RefCell<HashMap<u64, String>>>, c: Arc<LocalConnection>) {
     let mut stdin = tokio::io::stdin();
     loop {
         let size = stdin.read_u32_le().await.expect("error reading from stdin");
@@ -66,7 +61,7 @@ async fn reader(
         }
         drop(buffer);
         eprintln!("->server {:?}", item);
-        if let Some((pathname, _)) = reverse_name_map.borrow().get(&item.id) {
+        if let Some(pathname) = reverse_name_map.borrow().get(&item.id) {
             let (bus_name, object_path) = match pathname.find('/') {
                 None => (&pathname[..], "/StatusNotifierItem"),
                 Some(position) => pathname.split_at(position),
@@ -115,230 +110,6 @@ pub struct NameOwnerChanged {
     pub old_owner: String,
     pub new_owner: String,
 }
-#[derive(Debug)]
-struct Menu {
-    revision: u32,
-    layout: MenuEntries,
-}
-#[derive(Debug)]
-struct MenuEntries(DBusMenuEntry);
-impl dbus::arg::Arg for MenuEntries {
-    const ARG_TYPE: ArgType = ArgType::Struct;
-    fn signature() -> Signature<'static> {
-        // SAFETY: The string is a valid D-Bus signature and is NUL-terminated.
-        unsafe { Signature::from_slice_unchecked("(ia{sv}av)\0") }
-    }
-}
-
-fn get(i: &mut Iter, _parent: i32, depth: u32) -> Option<MenuEntries> {
-    eprintln!("Calling MenuEntries::get");
-    let mut x = i.recurse(ArgType::Struct)?;
-    eprintln!("Recursed into first struct");
-
-    let id: i32 = x.get()?;
-    assert!(x.next());
-    eprintln!("Got ID {}", id);
-    let mut properties = x.recurse(ArgType::Array)?;
-    eprintln!("Entered properties dict");
-    let mut entry_counter = 0;
-    let mut is_separator = None;
-    let mut label: Option<String> = None;
-    let mut enabled: Option<bool> = None;
-    let mut visible: Option<bool> = None;
-    let mut children_display: Option<bool> = None;
-    let mut has_next = true;
-    let mut disposition: Option<Disposition> = None;
-
-    while has_next {
-        let mut dict_entry = properties.recurse(ArgType::DictEntry)?;
-        has_next = properties.next();
-        eprintln!("Found a dict entry");
-        entry_counter += 1;
-        let prop_name: String = dict_entry.get()?;
-        eprintln!("Property name is {prop_name:?}");
-        assert!(dict_entry.next());
-        let mut variant_value = dict_entry.recurse(ArgType::Variant)?;
-        eprintln!("Property value is {variant_value:?}");
-        match &*prop_name {
-            "type" => {
-                // string: "standard" or "separator"
-                if is_separator
-                    .replace(match &*variant_value.get::<String>()? {
-                        "standard" => false,
-                        "separator" => true,
-                        _ => {
-                            eprintln!("Invalid entry type");
-                            return None;
-                        }
-                    })
-                    .is_some()
-                {
-                    eprintln!("Multiple type values not allowed");
-                    return None;
-                }
-            }
-            "label" => {
-                // string, with special handling of underscores
-                if label.replace(variant_value.get()?).is_some() {
-                    eprintln!("Multiple labels not allowed");
-                    return None;
-                }
-            }
-            "enabled" => {
-                // boolean - true if item can be activated
-                if enabled.replace(variant_value.get()?).is_some() {
-                    eprintln!("Multiple enabled values not allowed");
-                    return None;
-                }
-            }
-            "visible" => {
-                // boolean - true if item is visible
-                if visible.replace(variant_value.get()?).is_some() {
-                    eprintln!("Multiple visible values not allowed");
-                    return None;
-                }
-            }
-            "icon-name" => {} // string - icon name
-            "icon-data" => { // bytes - PNG icon data
-                 // FIXME: does this need to be decompressed in the guest or can
-                 // the PNG crate on the host be trusted with malicious PNG?
-            }
-            "shortcut" => {
-                // array of length-2 arrays of strings - shortcut keys
-                let mut outer_array = variant_value.recurse(ArgType::Array)?;
-                let mut has_next = true;
-                while has_next {
-                    let mut inner_array = outer_array.recurse(ArgType::Array)?;
-                    has_next = outer_array.next();
-                    let _s1: String = inner_array.get()?;
-                    if !inner_array.next() {
-                        return None;
-                    }
-                    let _s2: String = inner_array.get()?;
-                    if inner_array.next() {
-                        return None;
-                    }
-                }
-            }
-            "toggle-type" => {
-                // string, either "checkmark", "radio", or "" (not togglable)
-                match &*variant_value.get::<String>()? {
-                    "checkmark" | "radio" | "" => {}
-                    _ => {
-                        eprintln!("Invalid toggle type");
-                        return None;
-                    }
-                }
-            }
-            "toggle-state" => {
-                // integer (i32), either 0 (not toggled), 1 (toggled), or
-                // something else (indeterminate), default -1
-            }
-            "children-display" => {
-                eprintln!("children-display set");
-                // "submenu" if there are children, otherwise ""
-                if children_display
-                    .replace(match &*variant_value.get::<String>()? {
-                        "submenu" => true,
-                        "" => false,
-                        _ => {
-                            eprintln!("Invalid submenu type");
-                            return None;
-                        }
-                    })
-                    .is_some()
-                {
-                    eprintln!("children-display occurs twice");
-                    return None;
-                }
-            }
-            "disposition" => {
-                if disposition
-                    .replace(match &*variant_value.get::<String>()? {
-                        "normal" => Disposition::Normal,
-                        "informative" => Disposition::Informative,
-                        "warning" => Disposition::Warning,
-                        "alert" => Disposition::Alert,
-                        _ => {
-                            eprintln!("Invalid disposition");
-                            return None;
-                        }
-                    })
-                    .is_some()
-                {
-                    eprintln!("Cannot specify disposition more than once");
-                    return None;
-                }
-            } // "normal", "informative", "warning", or "alert"
-            x if x.starts_with("x-") => {} // ignored, but valid
-            x => eprintln!("Invalid property name {:?}", x),
-        }
-    }
-
-    eprintln!("All properties read");
-    if !x.next() {
-        eprintln!("No subentry array");
-        return None;
-    }
-    let mut subentries = x.recurse(ArgType::Array)?;
-    let mut children = vec![];
-    if children_display.unwrap_or(false) {
-        eprintln!(
-            "Processing submenus, content of type {:?}",
-            subentries.arg_type()
-        );
-        has_next = true;
-        while has_next {
-            let mut submenu = subentries.recurse(ArgType::Variant)?;
-            has_next = subentries.next();
-            eprintln!("Entered variant, content of type {:?}", submenu.arg_type());
-            children.push(get(&mut submenu, id, depth + 1)?.0);
-        }
-    } else if subentries.next() {
-        eprintln!("Submenu entries but submenu-display not set");
-        return None;
-    }
-
-    if i.next() {
-        return None;
-    }
-
-    if is_separator.unwrap_or(false) {
-        if entry_counter != if visible.is_some() { 2 } else { 1 } {
-            eprintln!("Separators must not have properties other than \u{201c}visible\u{201d}");
-            return None;
-        }
-
-        return Some(MenuEntries(DBusMenuEntry::Separator {
-            visible: visible.unwrap_or(true),
-        }));
-    } else {
-        return Some(MenuEntries(DBusMenuEntry::Standard {
-            label: label.unwrap_or_else(String::new),
-            visible: visible.unwrap_or(false),
-            children,
-            disposition: disposition.unwrap_or(Disposition::Normal),
-            id: unsafe { std::mem::transmute::<i32, Option<core::num::NonZeroI32>>(id) },
-            depth: 0,
-            parent: None,
-        }));
-    }
-}
-
-impl<'a> dbus::arg::Get<'a> for MenuEntries {
-    fn get(i: &mut Iter<'a>) -> Option<Self> {
-        get(i, 0, 0)
-    }
-}
-
-impl dbus::arg::ReadAll for Menu {
-    fn read(i: &mut dbus::arg::Iter<'_>) -> Result<Self, dbus::arg::TypeMismatchError> {
-        Ok(Self {
-            revision: i.read()?,
-            layout: i.read()?,
-        })
-    }
-}
 
 impl dbus::arg::ReadAll for NameOwnerChanged {
     fn read(i: &mut dbus::arg::Iter) -> Result<Self, dbus::arg::TypeMismatchError> {
@@ -366,8 +137,6 @@ thread_local! {
 struct IconStats {
     id: u64,
     state: Cell<u8>,
-    path: Path<'static>,
-    menu: Option<(LocalMsgMatch, Path<'static>)>,
 }
 
 fn handle_cb(
@@ -459,7 +228,7 @@ async fn client_server(
     );
     eprintln!("Created watcher proxy!");
     let name_map = Rc::new(RefCell::new(HashMap::<String, IconStats>::new()));
-    let reverse_name_map = Rc::new(RefCell::new(HashMap::<u64, (String, Option<Path>)>::new()));
+    let reverse_name_map = Rc::new(RefCell::new(HashMap::<u64, String>::new()));
     let reverse_name_map_ = reverse_name_map.clone();
     tokio::task::spawn_local(reader(reverse_name_map_, c.clone()));
     eprintln!("Spawned reader future!");
@@ -489,7 +258,7 @@ async fn client_server(
         item: String,
         c: Arc<LocalConnection>,
         name_map: Rc<RefCell<HashMap<String, IconStats>>>,
-        reverse_name_map: Rc<RefCell<HashMap<u64, (String, Option<Path<'static>>)>>>,
+        reverse_name_map: Rc<RefCell<HashMap<u64, String>>>,
     ) -> Result<(), Box<dyn Error>> {
         eprintln!("Going!");
         let (bus_name, object_path) = match item.find('/') {
@@ -508,10 +277,9 @@ async fn client_server(
             Duration::from_millis(1000),
             c.clone(),
         );
-        let (app_id, category, menu, status) = futures_util::join!(
+        let (app_id, category, status) = futures_util::join!(
             icon.id(),
             icon.category(),
-            icon.menu(),
             StatusNotifierItem::status(&icon)
         );
         let app_id = app_id?;
@@ -519,6 +287,7 @@ async fn client_server(
             return Result::<(), Box<dyn std::error::Error>>::Ok(());
         }
         let category = category?;
+        #[cfg(feature = "unsafe-enable-menu")]
         let menu = match menu {
             Ok(p) => Some(p),
             Err(e) => match e.name() {
@@ -526,61 +295,25 @@ async fn client_server(
                 _ => return Err(e.into()),
             },
         };
-        let (initial_layout, match_rule) = match &menu {
-            Some(m) => {
-                let menu = Proxy::new(bus_name.clone(), m, Duration::from_millis(1000), c.clone());
-
-                eprintln!("Issuing method call!");
-
-                let (iter, match_rule): (Result<Menu, _>, _) = futures_util::join!(
-                    menu.method_call(
-                        interface_com_canonical_dbusmenu(),
-                        get_layout(),
-                        (0i32, -1i32, Vec::<&str>::new()),
-                    ),
-                    c.add_match(layout_updated(bus_name.clone(), object_path.clone()))
-                );
-
-                eprintln!("Got menu!");
-                (Some(iter?), Some(match_rule?))
-            }
-            None => (None, None),
-        };
         let id = ID.with(|id| id.get()) + 1;
         ID.with(|x| x.set(id));
         eprintln!("Got new object {:?}, id {}", &item, id);
         send_or_panic(IconClientEvent {
             id,
-            event: ClientEvent::Create {
-                category,
-                app_id,
-                has_menu: initial_layout.is_some(),
-            },
+            event: ClientEvent::Create { category, app_id },
         });
-        if let Some(menu) = initial_layout {
-            eprintln!("Enabling menu!");
-            send_or_panic(IconClientEvent {
-                id,
-                event: ClientEvent::EnableMenu {
-                    revision: menu.revision,
-                    entries: menu.layout.0,
-                },
-            });
-        }
         name_map.borrow_mut().insert(
             bus_name.to_string(),
             IconStats {
                 id,
                 state: Cell::new(0),
-                path: object_path,
-                menu: menu.clone().map(|x| (match_rule.unwrap(), x)),
             },
         );
         eprintln!(
             "Create event sent, {:?} added to reverse name map",
             &bus_name.to_string()
         );
-        reverse_name_map.borrow_mut().insert(id, (item, menu));
+        reverse_name_map.borrow_mut().insert(id, item);
 
         send_or_panic(IconClientEvent {
             id,
@@ -655,7 +388,7 @@ async fn client_server(
 }
 
 fn handle_name_lost(
-    c: &Arc<LocalConnection>,
+    _c: &Arc<LocalConnection>,
     _msg: Message,
     NameOwnerChanged {
         name,
@@ -663,24 +396,14 @@ fn handle_name_lost(
         new_owner,
     }: NameOwnerChanged,
     name_map: Rc<RefCell<HashMap<String, IconStats>>>,
-    reverse_name_map: Rc<RefCell<HashMap<u64, (String, Option<Path<'static>>)>>>,
+    reverse_name_map: Rc<RefCell<HashMap<u64, String>>>,
 ) -> bool {
     eprintln!("Name {:?} lost", &name);
     if old_owner.is_empty() || !new_owner.is_empty() {
         return true;
     }
     let id = match name_map.borrow_mut().remove(&name) {
-        Some(mut stats) => {
-            if let Some((menu_info, _)) = stats.menu.take() {
-                let c = c.clone();
-                tokio::task::spawn_local(async move {
-                    c.remove_match(menu_info.token())
-                        .await
-                        .expect("cannot remove match")
-                });
-            }
-            stats.id
-        }
+        Some(stats) => stats.id,
         None => return true,
     };
     eprintln!("Name {} lost, destroying icon {}", &name, id);

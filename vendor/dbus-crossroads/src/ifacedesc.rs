@@ -410,7 +410,7 @@ impl<T: Send, A: arg::RefArg + Send + for<'x> arg::Get<'x> + arg::Arg + arg::App
         })
     }
 
-    pub fn set_custom<CB>(mut self, mut cb: CB) -> Self
+    pub fn set_custom<CB>(self, mut cb: CB) -> Self
     where CB: FnMut(PropContext, &mut Crossroads, A) -> Option<PropContext> + Send + 'static {
         self.desc.set_cb = Some(Dbg(Box::new(move |mut ctx, cr| {
             match ctx.check(|ctx| {

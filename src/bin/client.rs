@@ -18,49 +18,6 @@ use std::rc::Rc;
 
 use sha2::{Digest as _, Sha256};
 
-fn parse_dest(d: &str, prefix: &str, suffix: &str) -> Option<u64> {
-    let (total_len, prefix_len, suffix_len) = (d.len(), prefix.len(), suffix.len());
-    if total_len <= prefix_len + suffix_len {
-        return None; // too short
-    }
-    let suffix_start = total_len - suffix_len;
-    let (first, middle, rest) = (
-        &d[..prefix_len],
-        &d[prefix_len..suffix_start],
-        &d[suffix_start..],
-    );
-    // eprintln!("First {:?}, middle {:?}, last {:?}", first, middle, rest);
-    if first != prefix {
-        eprintln!(
-            "First part {:?} does not match expected prefix {:?}",
-            first, prefix
-        );
-        return None;
-    }
-    if rest != suffix {
-        eprintln!(
-            "Last part {:?} does not match expected suffix {:?}",
-            first, suffix
-        );
-        return None; // bad prefix or suffix
-    }
-    let first_byte = middle.as_bytes()[0];
-    match first_byte {
-        b'1'..=b'9' => match <u64 as core::str::FromStr>::from_str(middle) {
-            Err(e) => {
-                eprintln!("Parsing error for {:?}: {}", middle, e);
-                None
-            }
-            Ok(0) => unreachable!("0 does not start with 1 through 9"),
-            Ok(x) => Some(x),
-        },
-        _ => {
-            eprintln!("Bad first byte {:?}", first_byte);
-            None
-        }
-    }
-}
-
 thread_local! {
     static WRAPPER: Rc<RefCell<HashMap<u64, NotifierIcon>>> = Rc::new(RefCell::new(<HashMap<u64, NotifierIcon>>::new()));
     static ID: std::cell::Cell<u64> = std::cell::Cell::new(0);
@@ -73,25 +30,14 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
     tokio::task::spawn_local(async { panic!("D-Bus connection lost: {}", resource.await) });
     let pid = std::process::id();
     let cr_only_sni = Rc::new(RefCell::new(Crossroads::new()));
-    let cr_sni_menu = Rc::new(RefCell::new(Crossroads::new()));
     {
         let iface_token_1 = server::item::register_status_notifier_item::<NotifierIconWrapper>(
             &mut *cr_only_sni.borrow_mut(),
         );
-        let iface_token_2 = server::item::register_status_notifier_item::<NotifierIconWrapper>(
-            &mut *cr_sni_menu.borrow_mut(),
-        );
-        let iface_token_3 =
-            server::menu::register_dbusmenu::<NotifierIconWrapper>(&mut *cr_sni_menu.borrow_mut());
         let bus_name = names::path_status_notifier_item();
         cr_only_sni
             .borrow_mut()
             .insert(bus_name.clone(), &[iface_token_1], NotifierIconWrapper);
-        cr_sni_menu.borrow_mut().insert(
-            bus_name,
-            &[iface_token_2, iface_token_3],
-            NotifierIconWrapper,
-        );
     }
 
     let watcher = Proxy::new(
@@ -138,13 +84,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             }
         };
         let name = format!("org.freedesktop.StatusNotifierItem-{}-{}", pid, item.id);
-        if let ClientEvent::Create {
-            category,
-            app_id,
-            has_menu,
-        } = &item.event
-        {
-            let has_menu = *has_menu;
+        if let ClientEvent::Create { category, app_id } = &item.event {
             const PREFIX: &'static str = "org.qubes_os.vm.app_id.";
             let app_id = PREFIX.to_owned() + &app_id;
             if item.id <= last_index {
@@ -153,9 +93,6 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             if category.is_empty() {
                 eprintln!("Empty category for ID {:?}!", app_id);
                 continue;
-            }
-            if has_menu {
-                eprintln!("NYI: displaying menu")
             }
             last_index = item.id;
             // FIXME: sanitize the ID
@@ -205,22 +142,8 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
 
             eprintln!("Registering new item {}, app id is {:?}", &name, app_id);
 
-            let cr_ = if has_menu {
-                cr_sni_menu.clone()
-            } else {
-                cr_only_sni.clone()
-            };
-            let notifier = NotifierIcon::new(
-                item.id,
-                app_id,
-                category.clone(),
-                if has_menu {
-                    Some(Default::default())
-                } else {
-                    None
-                },
-                cr_.clone(),
-            );
+            let cr_ = cr_only_sni.clone();
+            let notifier = NotifierIcon::new(item.id, app_id, category.clone(), cr_.clone());
             let path = notifier.bus_path();
             items.borrow_mut().insert(item.id, notifier);
             eprintln!("Registering name {:?}", name);
@@ -308,9 +231,6 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                         .expect("Cannot release bus name?");
                     eprintln!("Released bus name {name}");
                     outer_ni.remove(&item.id).expect("Removed nonexistent ID?");
-                }
-                ClientEvent::EnableMenu { revision, entries } => {
-                    eprintln!("D-Bus menu enabled! Revision {revision}, entries {entries:?}");
                 }
             }
         }

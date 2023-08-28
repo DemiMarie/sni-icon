@@ -1,6 +1,6 @@
 //! Functions to obtain various D-Bus names
 
-use dbus::strings::{BusName};
+use dbus::strings::BusName;
 use dbus::strings::{Interface, Member, Path};
 pub fn interface_com_canonical_dbusmenu() -> Interface<'static> {
     // SAFETY: this is a valid NUL-terminated interface name
