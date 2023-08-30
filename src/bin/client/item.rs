@@ -35,6 +35,7 @@ pub(super) struct NotifierIcon {
     icon: Option<Vec<IconData>>,
     attention_icon: Option<Vec<IconData>>,
     overlay_icon: Option<Vec<IconData>>,
+    is_menu: bool,
 
     abort_handle: AbortHandle,
 }
@@ -46,7 +47,13 @@ impl Drop for NotifierIcon {
 }
 
 impl NotifierIcon {
-    pub fn new(id: u64, app_id: String, category: String, cr: Rc<RefCell<Crossroads>>) -> Self {
+    pub fn new(
+        id: u64,
+        app_id: String,
+        category: String,
+        cr: Rc<RefCell<Crossroads>>,
+        is_menu: bool,
+    ) -> Self {
         let (resource, connection) =
             dbus_tokio::connection::new_session_local().expect("Cannot connect to session bus");
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
@@ -74,6 +81,7 @@ impl NotifierIcon {
             icon: None,
             attention_icon: None,
             overlay_icon: None,
+            is_menu,
             abort_handle,
         }
     }
@@ -145,6 +153,7 @@ fn call_with_icon<T, U: FnOnce(&mut NotifierIcon) -> Result<T, dbus::MethodErr>>
 
 impl server::item::StatusNotifierItem for NotifierIconWrapper {
     fn context_menu(&mut self, x: i32, y: i32) -> Result<(), dbus::MethodErr> {
+        eprintln!("Got context menu event: {x}x{y}");
         call_with_icon(|icon| {
             send_or_panic(IconServerEvent {
                 id: icon.id,
@@ -211,7 +220,7 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         call_with_icon(|_| Err(dbus::MethodErr::no_property("menu")))
     }
     fn item_is_menu(&self) -> Result<bool, dbus::MethodErr> {
-        Ok(false)
+        call_with_icon(|icon| Ok(icon.is_menu))
     }
     fn icon_name(&self) -> Result<String, dbus::MethodErr> {
         Err(dbus::MethodErr::no_property("IconName"))

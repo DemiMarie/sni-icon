@@ -277,12 +277,14 @@ async fn client_server(
             Duration::from_millis(1000),
             c.clone(),
         );
-        let (app_id, category, status) = futures_util::join!(
+        let (app_id, category, is_menu, status) = futures_util::join!(
             icon.id(),
             icon.category(),
+            icon.item_is_menu(),
             StatusNotifierItem::status(&icon)
         );
         let app_id = app_id?;
+        let is_menu = is_menu?;
         if app_id.starts_with("org.qubes_os.vm.") {
             return Result::<(), Box<dyn std::error::Error>>::Ok(());
         }
@@ -300,7 +302,11 @@ async fn client_server(
         eprintln!("Got new object {:?}, id {}", &item, id);
         send_or_panic(IconClientEvent {
             id,
-            event: ClientEvent::Create { category, app_id },
+            event: ClientEvent::Create {
+                category,
+                app_id,
+                is_menu,
+            },
         });
         name_map.borrow_mut().insert(
             bus_name.to_string(),

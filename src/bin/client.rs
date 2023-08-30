@@ -84,7 +84,12 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             }
         };
         let name = format!("org.freedesktop.StatusNotifierItem-{}-{}", pid, item.id);
-        if let ClientEvent::Create { category, app_id } = &item.event {
+        if let ClientEvent::Create {
+            category,
+            app_id,
+            is_menu,
+        } = &item.event
+        {
             const PREFIX: &'static str = "org.qubes_os.vm.app_id.";
             let app_id = PREFIX.to_owned() + &app_id;
             if item.id <= last_index {
@@ -140,10 +145,14 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 }
             };
 
-            eprintln!("Registering new item {}, app id is {:?}", &name, app_id);
+            eprintln!(
+                "Registering new item {}, app id is {:?}, is_menu {}",
+                &name, app_id, is_menu
+            );
 
             let cr_ = cr_only_sni.clone();
-            let notifier = NotifierIcon::new(item.id, app_id, category.clone(), cr_.clone());
+            let notifier =
+                NotifierIcon::new(item.id, app_id, category.clone(), cr_.clone(), *is_menu);
             let path = notifier.bus_path();
             items.borrow_mut().insert(item.id, notifier);
             eprintln!("Registering name {:?}", name);
@@ -223,7 +232,6 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 ClientEvent::RemoveTooltip => {
                     ni.set_tooltip(None);
                 }
-
                 ClientEvent::Destroy => {
                     eprintln!("Releasing ID {}", item.id);
                     c.release_name(name.clone())
