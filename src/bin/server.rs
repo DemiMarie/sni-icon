@@ -269,8 +269,15 @@ async fn client_server(
             "Bus name is {:?}, object path is {:?}",
             bus_name, object_path
         );
-        let bus_name = BusName::new(bus_name)?;
-        let object_path = Path::new(object_path)?;
+        let bus_name = BusName::new(bus_name).map_err(|x| {
+            eprintln!("Bad bus name {:?}", x);
+            x
+        })?;
+        let object_path = Path::new(object_path).map_err(|x| {
+            eprintln!("Bad object path {:?}", x);
+            x
+        })?;
+        eprintln!("Object path is {}", object_path);
         let icon = Proxy::new(
             bus_name.clone(),
             object_path.clone(),
@@ -283,20 +290,18 @@ async fn client_server(
             icon.item_is_menu(),
             StatusNotifierItem::status(&icon)
         );
-        let app_id = app_id?;
-        let is_menu = is_menu?;
+        let app_id = app_id.map_err(|x| {
+            eprintln!("Oops! Cannot obtain app ID: {}", x);
+            x
+        })?;
+        eprintln!("App ID is {:?}", app_id);
+
+        let is_menu = is_menu.unwrap_or(false);
+        eprintln!("Is menu: {}", is_menu);
         if app_id.starts_with("org.qubes_os.vm.") {
             return Result::<(), Box<dyn std::error::Error>>::Ok(());
         }
         let category = category?;
-        #[cfg(feature = "unsafe-enable-menu")]
-        let menu = match menu {
-            Ok(p) => Some(p),
-            Err(e) => match e.name() {
-                Some("org.freedesktop.DBus.Error.NoSuchProperty") => None,
-                _ => return Err(e.into()),
-            },
-        };
         let id = ID.with(|id| id.get()) + 1;
         ID.with(|x| x.set(id));
         eprintln!("Got new object {:?}, id {}", &item, id);

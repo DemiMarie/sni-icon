@@ -54,6 +54,7 @@ impl NotifierIcon {
         cr: Rc<RefCell<Crossroads>>,
         is_menu: bool,
     ) -> Self {
+        eprintln!("Creating new notifier icon");
         let (resource, connection) =
             dbus_tokio::connection::new_session_local().expect("Cannot connect to session bus");
         let (abort_handle, abort_registration) = AbortHandle::new_pair();

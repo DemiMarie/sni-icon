@@ -28,7 +28,6 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
     let mut last_index = 0u64;
     let (resource, c) = connection::new_session_local().unwrap();
     tokio::task::spawn_local(async { panic!("D-Bus connection lost: {}", resource.await) });
-    let pid = std::process::id();
     let cr_only_sni = Rc::new(RefCell::new(Crossroads::new()));
     {
         let iface_token_1 = server::item::register_status_notifier_item::<NotifierIconWrapper>(
@@ -83,7 +82,6 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 eprintln!("->client {:?}", item);
             }
         };
-        let name = format!("org.freedesktop.StatusNotifierItem-{}-{}", pid, item.id);
         if let ClientEvent::Create {
             category,
             app_id,
@@ -147,15 +145,16 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
 
             eprintln!(
                 "Registering new item {}, app id is {:?}, is_menu {}",
-                &name, app_id, is_menu
+                &c.unique_name(),
+                app_id,
+                is_menu
             );
-
             let cr_ = cr_only_sni.clone();
             let notifier =
                 NotifierIcon::new(item.id, app_id, category.clone(), cr_.clone(), *is_menu);
             let path = notifier.bus_path();
+
             items.borrow_mut().insert(item.id, notifier);
-            eprintln!("Registering name {:?}", name);
             watcher
                 .method_call(
                     names::interface_status_notifier_watcher(),
@@ -234,10 +233,6 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 }
                 ClientEvent::Destroy => {
                     eprintln!("Releasing ID {}", item.id);
-                    c.release_name(name.clone())
-                        .await
-                        .expect("Cannot release bus name?");
-                    eprintln!("Released bus name {name}");
                     outer_ni.remove(&item.id).expect("Removed nonexistent ID?");
                 }
             }
