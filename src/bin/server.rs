@@ -1,4 +1,4 @@
-use dbus::nonblock::{LocalConnection, LocalMsgMatch, Proxy};
+use dbus::nonblock::{MsgMatch, Proxy, SyncConnection};
 use dbus_tokio::connection;
 
 use dbus::message::SignalArgs;
@@ -16,9 +16,7 @@ use sni_icon::names::*;
 use sni_icon::*;
 
 use core::cell::Cell;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::client::watcher::StatusNotifierWatcherStatusNotifierItemRegistered;
 use futures_util::TryFutureExt as _;
@@ -34,7 +32,7 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
     out.flush().expect("Cannot flush stdout");
 }
 
-async fn reader(reverse_name_map: Rc<RefCell<HashMap<u64, String>>>, c: Arc<LocalConnection>) {
+async fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>, c: Arc<SyncConnection>) {
     let mut stdin = tokio::io::stdin();
     loop {
         let size = stdin.read_u32_le().await.expect("error reading from stdin");
@@ -61,7 +59,7 @@ async fn reader(reverse_name_map: Rc<RefCell<HashMap<u64, String>>>, c: Arc<Loca
         }
         drop(buffer);
         eprintln!("->server {:?}", item);
-        if let Some(pathname) = reverse_name_map.borrow().get(&item.id) {
+        if let Some(pathname) = reverse_name_map.lock().unwrap().get(&item.id) {
             let (bus_name, object_path) = match pathname.find('/') {
                 None => (&pathname[..], "/StatusNotifierItem"),
                 Some(position) => pathname.split_at(position),
@@ -126,7 +124,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let local_set = tokio::task::LocalSet::new();
 
     // Let's start by starting up a connection to the session bus and request a name.
-    let (resource, c) = connection::new_session_local().unwrap();
+    let (resource, c) = connection::new_session_sync().unwrap();
     local_set.spawn_local(resource);
     let _x = local_set.spawn_local(client_server(c));
     Ok(local_set.await)
@@ -141,13 +139,13 @@ struct IconStats {
 
 fn handle_cb(
     msg: Message,
-    c: Arc<LocalConnection>,
+    c: Arc<SyncConnection>,
     flag: IconType,
-    name_map: Rc<RefCell<HashMap<String, IconStats>>>,
+    name_map: Arc<Mutex<HashMap<String, IconStats>>>,
 ) -> () {
     let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
     {
-        let nm = name_map.borrow();
+        let nm = name_map.lock().unwrap();
         let nm = match nm.get(&fullpath) {
             Some(state) if state.state.get() & (flag as u8) != 0 => state,
             _ => return,
@@ -162,7 +160,7 @@ fn handle_cb(
             Duration::from_millis(1000),
             &*c,
         );
-        let nm = name_map_.borrow();
+        let nm = name_map_.lock().unwrap();
         let nm = match nm.get(&fullpath) {
             Some(state) => state,
             _ => return,
@@ -217,9 +215,7 @@ fn handle_cb(
     });
 }
 
-async fn client_server(
-    c: Arc<LocalConnection>,
-) -> Result<(LocalMsgMatch, LocalMsgMatch), Box<dyn Error>> {
+async fn client_server(c: Arc<SyncConnection>) -> Result<(MsgMatch, MsgMatch), Box<dyn Error>> {
     let watcher = Proxy::new(
         name_status_notifier_watcher(),
         path_status_notifier_watcher(),
@@ -227,8 +223,8 @@ async fn client_server(
         c.clone(),
     );
     eprintln!("Created watcher proxy!");
-    let name_map = Rc::new(RefCell::new(HashMap::<String, IconStats>::new()));
-    let reverse_name_map = Rc::new(RefCell::new(HashMap::<u64, String>::new()));
+    let name_map = Arc::new(Mutex::new(HashMap::<String, IconStats>::new()));
+    let reverse_name_map = Arc::new(Mutex::new(HashMap::<u64, String>::new()));
     let reverse_name_map_ = reverse_name_map.clone();
     tokio::task::spawn_local(reader(reverse_name_map_, c.clone()));
     eprintln!("Spawned reader future!");
@@ -256,9 +252,9 @@ async fn client_server(
 
     async fn go(
         item: String,
-        c: Arc<LocalConnection>,
-        name_map: Rc<RefCell<HashMap<String, IconStats>>>,
-        reverse_name_map: Rc<RefCell<HashMap<u64, String>>>,
+        c: Arc<SyncConnection>,
+        name_map: Arc<Mutex<HashMap<String, IconStats>>>,
+        reverse_name_map: Arc<Mutex<HashMap<u64, String>>>,
     ) -> Result<(), Box<dyn Error>> {
         eprintln!("Going!");
         let (bus_name, object_path) = match item.find('/') {
@@ -313,7 +309,7 @@ async fn client_server(
                 is_menu,
             },
         });
-        name_map.borrow_mut().insert(
+        name_map.lock().unwrap().insert(
             bus_name.to_string(),
             IconStats {
                 id,
@@ -324,7 +320,7 @@ async fn client_server(
             "Create event sent, {:?} added to reverse name map",
             &bus_name.to_string()
         );
-        reverse_name_map.borrow_mut().insert(id, item);
+        reverse_name_map.lock().unwrap().insert(id, item);
 
         send_or_panic(IconClientEvent {
             id,
@@ -399,27 +395,28 @@ async fn client_server(
 }
 
 fn handle_name_lost(
-    _c: &Arc<LocalConnection>,
+    _c: &Arc<SyncConnection>,
     _msg: Message,
     NameOwnerChanged {
         name,
         old_owner,
         new_owner,
     }: NameOwnerChanged,
-    name_map: Rc<RefCell<HashMap<String, IconStats>>>,
-    reverse_name_map: Rc<RefCell<HashMap<u64, String>>>,
+    name_map: Arc<Mutex<HashMap<String, IconStats>>>,
+    reverse_name_map: Arc<Mutex<HashMap<u64, String>>>,
 ) -> bool {
     eprintln!("Name {:?} lost", &name);
     if old_owner.is_empty() || !new_owner.is_empty() {
         return true;
     }
-    let id = match name_map.borrow_mut().remove(&name) {
+    let id = match name_map.lock().unwrap().remove(&name) {
         Some(stats) => stats.id,
         None => return true,
     };
     eprintln!("Name {} lost, destroying icon {}", &name, id);
     reverse_name_map
-        .borrow_mut()
+        .lock()
+        .unwrap()
         .remove(&id)
         .expect("reverse and forward maps inconsistent");
     send_or_panic(IconClientEvent {

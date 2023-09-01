@@ -12,30 +12,29 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 use sni_icon::{names, server, ClientEvent, IconType};
-
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest as _, Sha256};
 
 thread_local! {
-    static WRAPPER: Rc<RefCell<HashMap<u64, NotifierIcon>>> = Rc::new(RefCell::new(<HashMap<u64, NotifierIcon>>::new()));
+    static WRAPPER: Arc<Mutex<HashMap<u64, NotifierIcon>>> = Arc::new(Mutex::new(<HashMap<u64, NotifierIcon>>::new()));
     static ID: std::cell::Cell<u64> = std::cell::Cell::new(0);
 }
 
 async fn client_server() -> Result<(), Box<dyn Error>> {
     let items = WRAPPER.with(|w| w.clone());
     let mut last_index = 0u64;
-    let (resource, c) = connection::new_session_local().unwrap();
+    let (resource, c) = connection::new_session_sync().unwrap();
     tokio::task::spawn_local(async { panic!("D-Bus connection lost: {}", resource.await) });
-    let cr_only_sni = Rc::new(RefCell::new(Crossroads::new()));
+    let cr_only_sni = Arc::new(Mutex::new(Crossroads::new()));
     {
         let iface_token_1 = server::item::register_status_notifier_item::<NotifierIconWrapper>(
-            &mut *cr_only_sni.borrow_mut(),
+            &mut *cr_only_sni.lock().unwrap(),
         );
         let bus_name = names::path_status_notifier_item();
         cr_only_sni
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(bus_name.clone(), &[iface_token_1], NotifierIconWrapper);
     }
 
@@ -154,7 +153,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 NotifierIcon::new(item.id, app_id, category.clone(), cr_.clone(), *is_menu);
             let path = notifier.bus_path();
 
-            items.borrow_mut().insert(item.id, notifier);
+            items.lock().unwrap().insert(item.id, notifier);
             watcher
                 .method_call(
                     names::interface_status_notifier_watcher(),
@@ -164,7 +163,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 .await
                 .expect("Could not register status notifier item")
         } else {
-            let mut outer_ni = items.borrow_mut();
+            let mut outer_ni = items.lock().unwrap();
             let ni = outer_ni.get_mut(&item.id).unwrap();
             match item.event {
                 ClientEvent::Create { .. } => unreachable!(),

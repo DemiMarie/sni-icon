@@ -16,7 +16,3 @@ tokio = { version = "1.29.1", features = ["io-std", "rt", "macros", "io-util"] }
 dbus-tokio = { version = "0.7.6", features = ["dbus-crossroads"] }
 futures-util = { version = "0.3.28", features = ["async-await", "async-await-macro", "alloc"], default-features = false }
 futures-macro = "0.3.28"
-
-[patch.crates-io]
-dbus = { path = "vendor/dbus" }
-dbus-crossroads = { path = "vendor/dbus-crossroads" }

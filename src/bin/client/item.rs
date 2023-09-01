@@ -1,14 +1,12 @@
-use core::cell::RefCell;
 use dbus::channel::{MatchingReceiver as _, Sender as _};
-use dbus::message::SignalArgs;
-use dbus::nonblock::LocalConnection as Connection;
+use dbus::message::SignalArgs as _;
+use dbus::nonblock::SyncConnection as Connection;
 use dbus::strings::{ErrorName, Path};
 use dbus_crossroads::Crossroads;
 use futures_util::future::{AbortHandle, Abortable};
 use sni_icon::{server, IconServerEvent};
 use std::io::Write as _;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sni_icon::{names::path_status_notifier_item as path, IconData, ServerEvent};
 
@@ -51,22 +49,19 @@ impl NotifierIcon {
         id: u64,
         app_id: String,
         category: String,
-        cr: Rc<RefCell<Crossroads>>,
+        cr: Arc<Mutex<Crossroads>>,
         is_menu: bool,
     ) -> Self {
         eprintln!("Creating new notifier icon");
         let (resource, connection) =
-            dbus_tokio::connection::new_session_local().expect("Cannot connect to session bus");
+            dbus_tokio::connection::new_session_sync().expect("Cannot connect to session bus");
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         tokio::task::spawn_local(Abortable::new(resource, abort_registration));
         connection.start_receive(
             dbus::message::MatchRule::new_method_call(),
             Box::new(move |msg, conn| {
-                let _path = msg
-                    .path()
-                    .expect("Method call with no path should have been rejected by libdbus");
                 super::ID.with(|id_| id_.set(id));
-                cr.borrow_mut().handle_message(msg, conn).unwrap();
+                cr.lock().unwrap().handle_message(msg, conn).unwrap();
                 true
             }),
         );
@@ -138,7 +133,7 @@ fn call_with_icon<T, U: FnOnce(&mut NotifierIcon) -> Result<T, dbus::MethodErr>>
     cb: U,
 ) -> Result<T, dbus::MethodErr> {
     crate::WRAPPER.with(|items| {
-        let mut items = items.borrow_mut();
+        let mut items = items.lock().unwrap();
         match crate::ID.with(|id| items.get_mut(&id.get())) {
             None => {
                 let err = unsafe {
