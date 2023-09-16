@@ -1,4 +1,6 @@
+use dbus::channel::{MatchingReceiver as _, Sender as _};
 use dbus::nonblock::{MsgMatch, Proxy, SyncConnection};
+use dbus_crossroads::Crossroads;
 use dbus_tokio::connection;
 
 use dbus::message::SignalArgs;
@@ -30,6 +32,130 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
         .expect("cannot write to stdout");
     out.write_all(&v[..]).expect("cannot write to stdout");
     out.flush().expect("Cannot flush stdout");
+}
+
+struct Watcher {
+    items: Arc<Mutex<std::collections::HashSet<String>>>,
+    hosts: Arc<Mutex<std::collections::HashSet<String>>>,
+    connection: Arc<SyncConnection>,
+    _msg_match: MsgMatch,
+}
+
+impl Watcher {
+    async fn new(connection: Arc<SyncConnection>) -> Result<Watcher, dbus::MethodErr> {
+        let items = Arc::new(Mutex::new(std::collections::HashSet::default()));
+        let hosts = Arc::new(Mutex::new(std::collections::HashSet::default()));
+        let items2 = items.clone();
+        let hosts2 = hosts.clone();
+        let connection_ = connection.clone();
+        let name_owner_changed_cb = move |connection_: &Arc<SyncConnection>,
+                                          _msg: Message,
+                                          NameOwnerChanged {
+                                              name,
+                                              old_owner: _,
+                                              new_owner,
+                                          }| {
+            hosts2.lock().unwrap().remove(&name);
+            if new_owner.is_empty() && items2.lock().unwrap().remove(&name) {
+                match connection_.send(
+                    (server::watcher::StatusNotifierWatcherStatusNotifierItemUnregistered {
+                        arg0: name.clone(),
+                    })
+                    .to_emit_message(&"/StatusNotifierWatcher".into()),
+                ) {
+                    Ok(_) => eprintln!("Removed name {:?}", name),
+                    Err(()) => eprintln!("Message send failed"),
+                };
+                match connection_.send(
+                    dbus::nonblock::stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged {
+                        interface_name: "org.kde.StatusNotifierWatcher".to_owned(),
+                        changed_properties: Default::default(),
+                        invalidated_properties: vec!["RegisteredStatusNotifierItems".to_owned()],
+                    }
+                    .to_emit_message(&"/StatusNotifierWatcher".into()),
+                ) {
+                    Ok(_) => eprintln!("Properties invalidated to indicate disconnection"),
+                    Err(()) => eprintln!("Message send failed"),
+                }
+            }
+
+            true
+        };
+        eprintln!(
+            "Requesting bus name {}",
+            names::name_status_notifier_watcher()
+        );
+        connection
+            .request_name(names::name_status_notifier_watcher(), false, true, false)
+            .await
+            .expect("Cannot connect to bus");
+        eprintln!(
+            "Received bus name {}",
+            names::name_status_notifier_watcher()
+        );
+        let x = dbus::message::MatchRule::new_signal(interface_dbus(), name_owner_changed())
+            .with_strict_sender(name_dbus())
+            .with_path(path_dbus());
+        eprintln!("Match rule created");
+        let _msg_match = connection
+            .add_match(x)
+            .await?
+            .cb(move |m, n| name_owner_changed_cb(&connection_, m, n));
+        eprintln!("Match rule added");
+
+        Ok(Self {
+            items,
+            hosts,
+            connection,
+            _msg_match,
+        })
+    }
+}
+
+impl server::watcher::StatusNotifierWatcher for Watcher {
+    fn register_status_notifier_item(&mut self, service: String) -> Result<(), dbus::MethodErr> {
+        // FIXME: validate
+        self.items.lock().unwrap().insert(service.clone());
+        match self.connection.send(
+            (server::watcher::StatusNotifierWatcherStatusNotifierItemRegistered { arg0: service })
+                .to_emit_message(&"/StatusNotifierWatcher".into()),
+        ) {
+            Ok(_) => eprintln!("Item registered"),
+            Err(()) => eprintln!("Message send failed"),
+        };
+        match self.connection.send(
+            dbus::nonblock::stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged {
+                interface_name: "org.kde.StatusNotifierWatcher".to_owned(),
+                changed_properties: Default::default(),
+                invalidated_properties: vec!["RegisteredStatusNotifierItems".to_owned()],
+            }
+            .to_emit_message(&"/StatusNotifierWatcher".into()),
+        ) {
+            Ok(_) => eprintln!("Properties invalidated"),
+            Err(()) => eprintln!("Message send failed"),
+        }
+        Ok(())
+    }
+    fn register_status_notifier_host(&mut self, service: String) -> Result<(), dbus::MethodErr> {
+        self.hosts.lock().unwrap().insert(service);
+        match self.connection.send(
+            (server::watcher::StatusNotifierWatcherStatusNotifierHostRegistered {})
+                .to_emit_message(&"/StatusNotifierWatcher".into()),
+        ) {
+            Ok(_) => {}
+            Err(()) => eprintln!("Message send failed"),
+        };
+        Ok(())
+    }
+    fn registered_status_notifier_items(&self) -> Result<Vec<String>, dbus::MethodErr> {
+        Ok(self.items.lock().unwrap().iter().cloned().collect())
+    }
+    fn is_status_notifier_host_registered(&self) -> Result<bool, dbus::MethodErr> {
+        Ok(!self.hosts.lock().unwrap().is_empty())
+    }
+    fn protocol_version(&self) -> Result<i32, dbus::MethodErr> {
+        Ok(1) // used by Swaybar
+    }
 }
 
 async fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>, c: Arc<SyncConnection>) {
@@ -125,8 +251,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Let's start by starting up a connection to the session bus and request a name.
     let (resource, c) = connection::new_session_sync().unwrap();
     local_set.spawn_local(resource);
-    let _x = local_set.spawn_local(client_server(c));
+    let (resource, c2) = connection::new_session_sync().unwrap();
+    local_set.spawn_local(resource);
+    let _x = local_set.spawn_local(client_server(c, c2));
     local_set.await;
+    eprintln!("Returning from main()");
     Ok(())
 }
 thread_local! {
@@ -215,7 +344,32 @@ fn handle_cb(
     });
 }
 
-async fn client_server(c: Arc<SyncConnection>) -> Result<(MsgMatch, MsgMatch), Box<dyn Error>> {
+async fn client_server(
+    c: Arc<SyncConnection>,
+    c2: Arc<SyncConnection>,
+) -> Result<(MsgMatch, MsgMatch), Box<dyn Error>> {
+    {
+        let cr = Arc::new(Mutex::new(Crossroads::new()));
+
+        let iface_token_1 =
+            server::watcher::register_status_notifier_watcher::<Watcher>(&mut cr.lock().unwrap());
+        let watcher = Watcher::new(c2.clone())
+            .await
+            .expect("watcher should be successfully created");
+        cr.lock().unwrap().insert(
+            names::path_status_notifier_watcher(),
+            &[iface_token_1],
+            watcher,
+        );
+        c2.start_receive(
+            dbus::message::MatchRule::new_method_call(),
+            Box::new(move |msg, conn| {
+                let mut x = cr.lock().expect("lock should not be poisoned");
+                (*x).handle_message(msg, conn).is_ok()
+            }),
+        );
+    }
+
     let watcher = Proxy::new(
         name_status_notifier_watcher(),
         path_status_notifier_watcher(),
@@ -223,6 +377,7 @@ async fn client_server(c: Arc<SyncConnection>) -> Result<(MsgMatch, MsgMatch), B
         c.clone(),
     );
     eprintln!("Created watcher proxy!");
+
     let name_map = Arc::new(Mutex::new(HashMap::<String, IconStats>::new()));
     let reverse_name_map = Arc::new(Mutex::new(HashMap::<u64, String>::new()));
     let reverse_name_map_ = reverse_name_map.clone();
@@ -405,10 +560,14 @@ fn handle_name_lost(
     name_map: Arc<Mutex<HashMap<String, IconStats>>>,
     reverse_name_map: Arc<Mutex<HashMap<u64, String>>>,
 ) {
-    eprintln!("Name {:?} lost", &name);
+    eprintln!(
+        "Got NameOwnerChanged: name {:?}, old owner {:?}, new owner {:?}",
+        name, old_owner, new_owner
+    );
     if old_owner.is_empty() || !new_owner.is_empty() {
         return;
     }
+    eprintln!("Name {:?} lost", &name);
     let id = match name_map.lock().unwrap().remove(&name) {
         Some(stats) => stats.id,
         None => return,
