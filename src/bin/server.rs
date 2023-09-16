@@ -387,10 +387,10 @@ async fn client_server(c: Arc<SyncConnection>) -> Result<(MsgMatch, MsgMatch), B
     let x = dbus::message::MatchRule::new_signal(interface_dbus(), name_owner_changed())
         .with_strict_sender(name_dbus())
         .with_path(path_dbus());
-    let matcher2 = c
-        .add_match(x)
-        .await?
-        .cb(move |m, n| handle_name_lost(&c, m, n, name_map.clone(), reverse_name_map.clone()));
+    let matcher2 = c.add_match(x).await?.cb(move |m, n| {
+        handle_name_lost(&c, m, n, name_map.clone(), reverse_name_map.clone());
+        true
+    });
     Ok((matcher1, matcher2))
 }
 
@@ -404,14 +404,14 @@ fn handle_name_lost(
     }: NameOwnerChanged,
     name_map: Arc<Mutex<HashMap<String, IconStats>>>,
     reverse_name_map: Arc<Mutex<HashMap<u64, String>>>,
-) -> bool {
+) {
     eprintln!("Name {:?} lost", &name);
     if old_owner.is_empty() || !new_owner.is_empty() {
-        return true;
+        return;
     }
     let id = match name_map.lock().unwrap().remove(&name) {
         Some(stats) => stats.id,
-        None => return true,
+        None => return,
     };
     eprintln!("Name {} lost, destroying icon {}", &name, id);
     reverse_name_map
@@ -422,6 +422,5 @@ fn handle_name_lost(
     send_or_panic(IconClientEvent {
         id,
         event: ClientEvent::Destroy,
-    });
-    true
+    })
 }
