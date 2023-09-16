@@ -48,7 +48,7 @@ async fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>, c: Arc<SyncC
         assert_eq!(bytes_read, buffer.len());
         eprintln!("{} bytes read!", bytes_read);
         let (item, size): (sni_icon::IconServerEvent, usize) =
-            bincode::decode_from_slice(&mut buffer[..], bincode::config::standard())
+            bincode::decode_from_slice(&buffer[..], bincode::config::standard())
                 .expect("malformed message");
         if size != buffer.len() {
             panic!(
@@ -122,12 +122,12 @@ impl dbus::arg::ReadAll for NameOwnerChanged {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
     let local_set = tokio::task::LocalSet::new();
-
     // Let's start by starting up a connection to the session bus and request a name.
     let (resource, c) = connection::new_session_sync().unwrap();
     local_set.spawn_local(resource);
     let _x = local_set.spawn_local(client_server(c));
-    Ok(local_set.await)
+    local_set.await;
+    Ok(())
 }
 thread_local! {
     static ID: std::cell::Cell<u64> = std::cell::Cell::new(0);
@@ -142,7 +142,7 @@ fn handle_cb(
     c: Arc<SyncConnection>,
     flag: IconType,
     name_map: Arc<Mutex<HashMap<String, IconStats>>>,
-) -> () {
+) {
     let fullpath = format!("{}{}", msg.sender().unwrap(), msg.path().unwrap());
     {
         let nm = name_map.lock().unwrap();

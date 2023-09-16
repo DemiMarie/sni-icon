@@ -29,7 +29,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
     let cr_only_sni = Arc::new(Mutex::new(Crossroads::new()));
     {
         let iface_token_1 = server::item::register_status_notifier_item::<NotifierIconWrapper>(
-            &mut *cr_only_sni.lock().unwrap(),
+            &mut cr_only_sni.lock().unwrap(),
         );
         let bus_name = names::path_status_notifier_item();
         cr_only_sni
@@ -60,8 +60,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             .expect("error reading from stdin");
         assert_eq!(bytes_read, buffer.len());
         eprintln!("{} bytes read!", bytes_read);
-        let (item, size) =
-            bincode::decode_from_slice(&mut buffer[..], bincode::config::standard())?;
+        let (item, size) = bincode::decode_from_slice(&buffer[..], bincode::config::standard())?;
         if size != buffer.len() {
             panic!(
                 "Malformed message on stdin: got {} bytes but expected {}",
@@ -87,8 +86,8 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             is_menu,
         } = &item.event
         {
-            const PREFIX: &'static str = "org.qubes_os.vm.app_id.";
-            let app_id = PREFIX.to_owned() + &app_id;
+            const PREFIX: &str = "org.qubes_os.vm.app_id.";
+            let app_id = PREFIX.to_owned() + app_id;
             if item.id <= last_index {
                 panic!("Item ID not monotonically increasing");
             }
@@ -158,7 +157,7 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
                 .method_call(
                     names::interface_status_notifier_watcher(),
                     names::register_status_notifier_item(),
-                    (format!("{}", path),),
+                    (path.to_string(),),
                 )
                 .await
                 .expect("Could not register status notifier item")
@@ -244,5 +243,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let local_set = tokio::task::LocalSet::new();
 
     local_set.spawn_local(client_server());
-    Ok(local_set.await)
+    local_set.await;
+    Ok(())
 }

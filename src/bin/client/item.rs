@@ -225,9 +225,8 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         call_with_icon(|icon| {
             Ok(icon
                 .icon
-                .as_ref()
-                .map(|f| f.as_slice())
-                .unwrap_or_else(|| &[])
+                .as_deref()
+                .unwrap_or(&[])
                 .iter()
                 .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
                 .collect())
@@ -240,9 +239,8 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         call_with_icon(|overlay_icon| {
             Ok(overlay_icon
                 .overlay_icon
-                .as_ref()
-                .map(|f| f.as_slice())
-                .unwrap_or_else(|| &[])
+                .as_deref()
+                .unwrap_or(&[])
                 .iter()
                 .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
                 .collect())
@@ -255,9 +253,8 @@ impl server::item::StatusNotifierItem for NotifierIconWrapper {
         call_with_icon(|attention_icon| {
             Ok(attention_icon
                 .attention_icon
-                .as_ref()
-                .map(|f| f.as_slice())
-                .unwrap_or_else(|| &[])
+                .as_deref()
+                .unwrap_or(&[])
                 .iter()
                 .map(|f| (f.width as i32, f.height as i32, f.data.clone()))
                 .collect())
