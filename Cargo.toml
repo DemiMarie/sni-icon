@@ -2,6 +2,13 @@
 name = "sni-icon"
 version = "0.1.0"
 edition = "2021"
+readme = "README.md"
+keywords = ["StatusNotifierItem", "SNI", "Qubes", "Qubes OS", "Spectrum", "SpectrumOS", "Spectrum OS"]
+repository = "git+https://github.com/DemiMarie/sni-icon.git"
+description = """
+StatusNotifierItem proxy for Qubes OS and Spectrum OS.
+"""
+categories = ["dbus", "Qubes", "Spectrum"]
 
 license = "MPL-2.0"
 
