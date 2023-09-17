@@ -185,7 +185,8 @@ async fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>, c: Arc<SyncC
         }
         drop(buffer);
         eprintln!("->server {:?}", item);
-        if let Some(pathname) = reverse_name_map.lock().unwrap().get(&item.id) {
+        let lock = reverse_name_map.lock().unwrap().get(&item.id).map(|x| x.to_owned());
+        if let Some(pathname) = lock {
             let (bus_name, object_path) = match pathname.find('/') {
                 None => (&pathname[..], "/StatusNotifierItem"),
                 Some(position) => pathname.split_at(position),
