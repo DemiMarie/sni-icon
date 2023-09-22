@@ -11,7 +11,7 @@ use dbus::message::SignalArgs;
 use dbus::strings::{BusName, Path};
 use dbus::Message;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::io::Write;
 use std::time::Duration;
@@ -39,16 +39,16 @@ fn send_or_panic<T: bincode::Encode>(s: T) {
 }
 
 struct Watcher {
-    items: Arc<Mutex<std::collections::HashSet<String>>>,
-    hosts: Arc<Mutex<std::collections::HashSet<String>>>,
+    items: Arc<Mutex<HashSet<String>>>,
+    hosts: Arc<Mutex<HashSet<String>>>,
     connection: Arc<SyncConnection>,
     _msg_match: MsgMatch,
 }
 
 impl Watcher {
     async fn new(connection: Arc<SyncConnection>) -> Result<Watcher, dbus::MethodErr> {
-        let items = Arc::new(Mutex::new(std::collections::HashSet::default()));
-        let hosts = Arc::new(Mutex::new(std::collections::HashSet::default()));
+        let items = Arc::new(Mutex::new(HashSet::default()));
+        let hosts = Arc::new(Mutex::new(HashSet::default()));
         let items2 = items.clone();
         let hosts2 = hosts.clone();
         let connection_ = connection.clone();
