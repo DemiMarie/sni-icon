@@ -22,7 +22,7 @@ use sni_icon::names::*;
 use sni_icon::*;
 
 use core::cell::Cell;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::client::watcher::StatusNotifierWatcherStatusNotifierItemRegistered;
 use futures_util::TryFutureExt as _;
@@ -45,7 +45,19 @@ struct Watcher {
     _msg_match: MsgMatch,
 }
 
+fn lock<T>(l: &Mutex<T>) -> MutexGuard<T> {
+    l.lock().expect("mutex should not be poisoned")
+}
+
 impl Watcher {
+    fn items(&self) -> MutexGuard<HashSet<String>> {
+        self.items.lock().expect("mutex should not be poisoned")
+    }
+
+    fn hosts(&self) -> MutexGuard<HashSet<String>> {
+        self.hosts.lock().expect("mutex should not be poisoned")
+    }
+
     async fn new(connection: Arc<SyncConnection>) -> Result<Watcher, dbus::MethodErr> {
         let items = Arc::new(Mutex::new(HashSet::default()));
         let hosts = Arc::new(Mutex::new(HashSet::default()));
@@ -59,8 +71,8 @@ impl Watcher {
                                               old_owner: _,
                                               new_owner,
                                           }| {
-            hosts2.lock().unwrap().remove(&name);
-            if new_owner.is_empty() && items2.lock().unwrap().remove(&name) {
+            lock(&*hosts2).remove(&name);
+            if new_owner.is_empty() && lock(&*items2).remove(&name) {
                 match connection_.send(
                     (server::watcher::StatusNotifierWatcherStatusNotifierItemUnregistered {
                         arg0: name.clone(),
@@ -119,7 +131,7 @@ impl Watcher {
 impl server::watcher::StatusNotifierWatcher for Watcher {
     fn register_status_notifier_item(&mut self, service: String) -> Result<(), dbus::MethodErr> {
         // FIXME: validate
-        self.items.lock().unwrap().insert(service.clone());
+        self.items().insert(service.clone());
         match self.connection.send(
             (server::watcher::StatusNotifierWatcherStatusNotifierItemRegistered { arg0: service })
                 .to_emit_message(&"/StatusNotifierWatcher".into()),
@@ -141,7 +153,7 @@ impl server::watcher::StatusNotifierWatcher for Watcher {
         Ok(())
     }
     fn register_status_notifier_host(&mut self, service: String) -> Result<(), dbus::MethodErr> {
-        self.hosts.lock().unwrap().insert(service);
+        self.hosts().insert(service);
         match self.connection.send(
             (server::watcher::StatusNotifierWatcherStatusNotifierHostRegistered {})
                 .to_emit_message(&"/StatusNotifierWatcher".into()),
@@ -152,10 +164,10 @@ impl server::watcher::StatusNotifierWatcher for Watcher {
         Ok(())
     }
     fn registered_status_notifier_items(&self) -> Result<Vec<String>, dbus::MethodErr> {
-        Ok(self.items.lock().unwrap().iter().cloned().collect())
+        Ok(self.items().iter().cloned().collect())
     }
     fn is_status_notifier_host_registered(&self) -> Result<bool, dbus::MethodErr> {
-        Ok(!self.hosts.lock().unwrap().is_empty())
+        Ok(!self.hosts().is_empty())
     }
     fn protocol_version(&self) -> Result<i32, dbus::MethodErr> {
         Ok(1) // used by Swaybar
@@ -189,11 +201,7 @@ async fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>, c: Arc<SyncC
         }
         drop(buffer);
         eprintln!("->server {:?}", item);
-        let lock = reverse_name_map
-            .lock()
-            .unwrap()
-            .get(&item.id)
-            .map(|x| x.to_owned());
+        let lock = lock(&*reverse_name_map).get(&item.id).map(|x| x.to_owned());
         if let Some(pathname) = lock {
             let (bus_name, object_path) = match pathname.find('/') {
                 None => (&pathname[..], "/StatusNotifierItem"),
@@ -289,7 +297,7 @@ fn handle_cb(
         .expect("D-Bus will not send a message with no path");
     let fullpath = format!("{}{}", sender, path);
     {
-        let nm = name_map.lock().unwrap();
+        let nm = lock(&*name_map);
         let nm = match nm.get(&fullpath) {
             Some(state) if state.state.get() & (flag as u8) == 0 => state,
             _ => return,
@@ -305,7 +313,7 @@ fn handle_cb(
             &*c,
         );
         {
-            let nm = name_map_.lock().expect("mutex should not be poisoned");
+            let nm = lock(&*name_map_);
             let nm = match nm.get(&fullpath) {
                 Some(state) => state,
                 _ => return, // Icon does not exist
@@ -315,7 +323,7 @@ fn handle_cb(
         match flag {
             IconType::Normal | IconType::Overlay | IconType::Attention => {
                 if let Ok(icon_pixmap) = icon.icon_pixmap().await {
-                    let nm = name_map_.lock().expect("mutex should not be poisoned");
+                    let nm = lock(&*name_map_);
                     let nm = match nm.get(&fullpath) {
                         Some(state) => state,
                         _ => return, // Icon does not exist
@@ -336,14 +344,14 @@ fn handle_cb(
                         },
                     })
                 } else if let Ok(_icon_name) = icon.icon_name().await {
-                    let nm = name_map_.lock().expect("mutex should not be poisoned");
+                    let nm = lock(&*name_map_);
                     let nm = match nm.get(&fullpath) {
                         Some(state) => state,
                         _ => return, // Icon does not exist
                     };
                     nm.state.set(!(flag as u8) & nm.state.get());
                 } else {
-                    let nm = name_map_.lock().expect("mutex should not be poisoned");
+                    let nm = lock(&*name_map_);
                     let nm = match nm.get(&fullpath) {
                         Some(state) => state,
                         _ => return, // Icon does not exist
@@ -357,7 +365,7 @@ fn handle_cb(
             }
             IconType::Title => {
                 let title = icon.title().await;
-                let nm = name_map_.lock().expect("mutex should not be poisoned");
+                let nm = lock(&*name_map_);
                 let nm = match nm.get(&fullpath) {
                     Some(state) => state,
                     _ => return, // Icon does not exist
@@ -371,7 +379,7 @@ fn handle_cb(
 
             IconType::Status => {
                 let status = StatusNotifierItem::status(&icon).await;
-                let nm = name_map_.lock().expect("mutex should not be poisoned");
+                let nm = lock(&*name_map_);
                 let nm = match nm.get(&fullpath) {
                     Some(state) => state,
                     _ => return, // Icon does not exist
@@ -393,13 +401,12 @@ async fn client_server(
     {
         let cr = Arc::new(Mutex::new(Crossroads::new()));
 
-        let iface_token_1 = server::watcher::register_status_notifier_watcher::<Watcher>(
-            &mut cr.lock().expect("mutex should not be poisoned"),
-        );
+        let iface_token_1 =
+            server::watcher::register_status_notifier_watcher::<Watcher>(&mut lock(&*cr));
         let watcher = Watcher::new(c2.clone())
             .await
             .expect("watcher should be successfully created");
-        cr.lock().expect("mutex should not be poisoned").insert(
+        lock(&*cr).insert(
             names::path_status_notifier_watcher(),
             &[iface_token_1],
             watcher,
@@ -407,7 +414,7 @@ async fn client_server(
         c2.start_receive(
             dbus::message::MatchRule::new_method_call(),
             Box::new(move |msg, conn| {
-                let mut x = cr.lock().expect("lock should not be poisoned");
+                let mut x = lock(&*cr);
                 (*x).handle_message(msg, conn).is_ok()
             }),
         );
@@ -507,24 +514,18 @@ async fn client_server(
                 is_menu,
             },
         });
-        name_map
-            .lock()
-            .expect("mutex should not be poisoned")
-            .insert(
-                bus_name.to_string(),
-                IconStats {
-                    id,
-                    state: Cell::new(0),
-                },
-            );
+        lock(&name_map).insert(
+            bus_name.to_string(),
+            IconStats {
+                id,
+                state: Cell::new(0),
+            },
+        );
         eprintln!(
             "Create event sent, {:?} added to reverse name map",
             &bus_name.to_string()
         );
-        reverse_name_map
-            .lock()
-            .expect("mutex should not be poisoned")
-            .insert(id, item);
+        lock(&*reverse_name_map).insert(id, item);
 
         send_or_panic(IconClientEvent {
             id,
@@ -617,18 +618,12 @@ fn handle_name_lost(
         return;
     }
     eprintln!("Name {:?} lost", &name);
-    let id = match name_map
-        .lock()
-        .expect("mutex should not be poisoned")
-        .remove(&name)
-    {
+    let id = match lock(&*name_map).remove(&name) {
         Some(stats) => stats.id,
         None => return,
     };
     eprintln!("Name {} lost, destroying icon {}", &name, id);
-    reverse_name_map
-        .lock()
-        .expect("mutex should not be poisoned")
+    lock(&*reverse_name_map)
         .remove(&id)
         .expect("reverse and forward maps inconsistent");
     send_or_panic(IconClientEvent {
