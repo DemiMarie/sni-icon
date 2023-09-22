@@ -258,9 +258,9 @@ impl dbus::arg::ReadAll for NameOwnerChanged {
 async fn main() -> Result<(), Box<dyn Error>> {
     let local_set = tokio::task::LocalSet::new();
     // Let's start by starting up a connection to the session bus and request a name.
-    let (resource, c) = connection::new_session_sync().unwrap();
+    let (resource, c) = connection::new_session_sync()?;
     local_set.spawn_local(resource);
-    let (resource, c2) = connection::new_session_sync().unwrap();
+    let (resource, c2) = connection::new_session_sync()?;
     local_set.spawn_local(resource);
     let _x = local_set.spawn_local(client_server(c, c2));
     local_set.await;
