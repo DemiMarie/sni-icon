@@ -435,25 +435,35 @@ async fn client_server(
     eprintln!("Spawned reader future!");
     let c_ = c.clone();
     let name_map_ = name_map.clone();
-    c.add_match(client::item::StatusNotifierItemNewStatus::match_rule(
-        None, None,
-    ))
-    .await?
-    .cb(move |msg, _: ()| {
-        handle_cb(msg, c_.clone(), IconType::Status, name_map_.clone());
-        true
-    });
+    let match_rule1 = c
+        .add_match(client::item::StatusNotifierItemNewStatus::match_rule(
+            None, None,
+        ))
+        .await?
+        .cb(move |msg, _: ()| {
+            handle_cb(msg, c_.clone(), IconType::Status, name_map_.clone());
+            true
+        });
     eprintln!("Added status match!");
     let c_ = c.clone();
     let name_map_ = name_map.clone();
-    c.add_match(client::item::StatusNotifierItemNewTitle::match_rule(
-        None, None,
-    ))
-    .await?
-    .cb(move |msg, _: ()| {
-        handle_cb(msg, c_.clone(), IconType::Title, name_map_.clone());
-        true
-    });
+    match c
+        .add_match(client::item::StatusNotifierItemNewTitle::match_rule(
+            None, None,
+        ))
+        .await
+    {
+        Ok(rule) => {
+            rule.cb(move |msg, _: ()| {
+                handle_cb(msg, c_.clone(), IconType::Title, name_map_.clone());
+                true
+            });
+        }
+        Err(e) => {
+            let _: Result<_, _> = c.remove_match(match_rule1.token()).await;
+            return Err(e.into());
+        }
+    }
 
     async fn go(
         item: String,
