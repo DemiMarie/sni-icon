@@ -402,9 +402,7 @@ async fn client_server(
 
         let iface_token_1 =
             server::watcher::register_status_notifier_watcher::<Watcher>(&mut lock(&*cr));
-        let watcher = Watcher::new(c2.clone())
-            .await
-            .expect("watcher should be successfully created");
+        let watcher = Watcher::new(c2.clone()).await?;
         lock(&*cr).insert(
             names::path_status_notifier_watcher(),
             &[iface_token_1],
