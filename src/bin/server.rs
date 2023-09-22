@@ -103,8 +103,7 @@ impl Watcher {
         );
         connection
             .request_name(names::name_status_notifier_watcher(), false, true, false)
-            .await
-            .expect("Cannot connect to bus");
+            .await?;
         eprintln!(
             "Received bus name {}",
             names::name_status_notifier_watcher()
