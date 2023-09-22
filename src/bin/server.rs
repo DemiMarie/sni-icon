@@ -620,14 +620,9 @@ fn handle_name_lost(
     name_map: Arc<Mutex<HashMap<String, IconStats>>>,
     reverse_name_map: Arc<Mutex<HashMap<u64, String>>>,
 ) {
-    eprintln!(
-        "Got NameOwnerChanged: name {:?}, old owner {:?}, new owner {:?}",
-        name, old_owner, new_owner
-    );
     if old_owner.is_empty() || !new_owner.is_empty() {
         return;
     }
-    eprintln!("Name {:?} lost", &name);
     let id = match lock(&*name_map).remove(&name) {
         Some(stats) => stats.id,
         None => return,
