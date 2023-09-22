@@ -30,7 +30,8 @@ use tokio::io::AsyncReadExt;
 
 fn send_or_panic<T: bincode::Encode>(s: T) {
     let mut out = std::io::stdout().lock();
-    let v = bincode::encode_to_vec(s, bincode::config::standard()).expect("Cannot encode data");
+    let v = bincode::encode_to_vec(s, bincode::config::standard())
+        .expect("data should be successfully encoded");
     eprintln!("Sending {} bytes", v.len());
     out.write_all(&((v.len() as u32).to_le_bytes())[..])
         .expect("cannot write to stdout");
@@ -306,8 +307,10 @@ fn handle_cb(
     let name_map_ = name_map.clone();
     tokio::task::spawn_local(async move {
         let icon = Proxy::new(
-            msg.sender().unwrap(),
-            msg.path().unwrap(),
+            msg.sender()
+                .expect("D-Bus will not send a message with no sender"),
+            msg.path()
+                .expect("D-Bus will not send a message with no path"),
             Duration::from_millis(1000),
             &*c,
         );
