@@ -16,7 +16,6 @@ fn send_or_panic<T: serde::Serialize>(s: T) {
         .with_fixint_encoding()
         .with_native_endian()
         .reject_trailing_bytes();
-    let data = options.serialize(&s).expect("Cannot serialize object?");
     let mut out = std::io::stdout().lock();
     let v = options.serialize(&s).expect("Cannot encode data");
     eprintln!("Sending {} bytes", v.len());
