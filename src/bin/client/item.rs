@@ -7,12 +7,18 @@ use futures_util::future::{AbortHandle, Abortable};
 use sni_icon::{server, IconServerEvent};
 use std::io::Write as _;
 use std::sync::{Arc, Mutex};
+use bincode::Options as _;
 
 use sni_icon::{names::path_status_notifier_item as path, IconData, ServerEvent};
 
-fn send_or_panic<T: bincode::Encode>(s: T) {
+fn send_or_panic<T: serde::Serialize>(s: T) {
+    let options = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_native_endian()
+        .reject_trailing_bytes();
+    let data = options.serialize(&s).expect("Cannot serialize object?");
     let mut out = std::io::stdout().lock();
-    let v = bincode::encode_to_vec(s, bincode::config::standard()).expect("Cannot encode data");
+    let v = options.serialize(&s).expect("Cannot encode data");
     eprintln!("Sending {} bytes", v.len());
     out.write_all(&((v.len() as u32).to_le_bytes())[..])
         .expect("cannot write to stdout");

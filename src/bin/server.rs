@@ -28,10 +28,15 @@ use crate::client::watcher::StatusNotifierWatcherStatusNotifierItemRegistered;
 use futures_util::TryFutureExt as _;
 use tokio::io::AsyncReadExt;
 
-fn send_or_panic<T: bincode::Encode>(s: T) {
+use bincode::Options;
+
+fn send_or_panic<T: serde::Serialize>(s: T) {
     let mut out = std::io::stdout().lock();
-    let v = bincode::encode_to_vec(s, bincode::config::standard())
-        .expect("data should be successfully encoded");
+    let options = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_native_endian()
+        .reject_trailing_bytes();
+    let v = options.serialize(&s).expect("Cannot serialize object?");
     eprintln!("Sending {} bytes", v.len());
     out.write_all(&((v.len() as u32).to_le_bytes())[..])
         .expect("cannot write to stdout");
@@ -98,17 +103,9 @@ impl Watcher {
 
             true
         };
-        eprintln!(
-            "Requesting bus name {}",
-            names::name_status_notifier_watcher()
-        );
         connection
             .request_name(names::name_status_notifier_watcher(), false, true, false)
             .await?;
-        eprintln!(
-            "Received bus name {}",
-            names::name_status_notifier_watcher()
-        );
         let x = dbus::message::MatchRule::new_signal(interface_dbus(), name_owner_changed())
             .with_strict_sender(name_dbus())
             .with_path(path_dbus());
@@ -177,6 +174,10 @@ impl server::watcher::StatusNotifierWatcher for Watcher {
 async fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>, c: Arc<SyncConnection>) {
     let mut stdin = tokio::io::stdin();
     loop {
+        let options = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_native_endian()
+            .reject_trailing_bytes();
         let size = stdin.read_u32_le().await.expect("error reading from stdin");
         eprintln!("Got something on stdin: length {}!", size);
         if size > 0x80_000_000 {
@@ -189,16 +190,8 @@ async fn reader(reverse_name_map: Arc<Mutex<HashMap<u64, String>>>, c: Arc<SyncC
             .expect("error reading from stdin");
         assert_eq!(bytes_read, buffer.len());
         eprintln!("{} bytes read!", bytes_read);
-        let (item, size): (sni_icon::IconServerEvent, usize) =
-            bincode::decode_from_slice(&buffer[..], bincode::config::standard())
-                .expect("malformed message");
-        if size != buffer.len() {
-            panic!(
-                "Malformed message on stdin: got {} bytes but expected {}",
-                buffer.len(),
-                size
-            );
-        }
+        let item: sni_icon::IconServerEvent =
+            options.deserialize(&buffer[..]).expect("malformed message");
         drop(buffer);
         eprintln!("->server {:?}", item);
         let lock = lock(&*reverse_name_map).get(&item.id).map(|x| x.to_owned());

@@ -14,6 +14,7 @@ use tokio::io::AsyncReadExt;
 use sni_icon::{names, server, ClientEvent, IconType};
 use std::sync::{Arc, Mutex};
 
+use bincode::Options as _;
 use sha2::{Digest as _, Sha256};
 
 thread_local! {
@@ -60,14 +61,11 @@ async fn client_server() -> Result<(), Box<dyn Error>> {
             .expect("error reading from stdin");
         assert_eq!(bytes_read, buffer.len());
         eprintln!("{} bytes read!", bytes_read);
-        let (item, size) = bincode::decode_from_slice(&buffer[..], bincode::config::standard())?;
-        if size != buffer.len() {
-            panic!(
-                "Malformed message on stdin: got {} bytes but expected {}",
-                buffer.len(),
-                size
-            );
-        }
+        let options = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_native_endian()
+            .reject_trailing_bytes();
+        let item = options.deserialize(&buffer[..])?;
         drop(buffer);
         match &item {
             sni_icon::IconClientEvent {

@@ -2,7 +2,7 @@ pub mod client;
 pub mod names;
 pub mod server;
 
-#[derive(Debug, bincode::Decode, bincode::Encode, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 pub enum IconType {
     Normal = 1,
@@ -12,7 +12,7 @@ pub enum IconType {
     Title = 16,
 }
 
-#[derive(Debug, bincode::Decode, bincode::Encode, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Event {
     Clicked,
@@ -21,7 +21,7 @@ pub enum Event {
     Closed,
 }
 
-#[derive(Debug, bincode::Decode, bincode::Encode)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub enum ClientEvent {
     Create {
         category: String,
@@ -49,7 +49,7 @@ pub enum ClientEvent {
     RemoveTooltip,
 }
 
-#[derive(Debug, bincode::Decode, bincode::Encode)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub enum ServerEvent {
     Activate { x: i32, y: i32 },
     ContextMenu { x: i32, y: i32 },
@@ -57,26 +57,26 @@ pub enum ServerEvent {
     Scroll { delta: i32, orientation: String },
 }
 
-#[derive(Debug, bincode::Decode, bincode::Encode)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct IconClientEvent {
     pub id: u64,
     pub event: ClientEvent,
 }
 
-#[derive(Debug, bincode::Decode, bincode::Encode)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct IconServerEvent {
     pub id: u64,
     pub event: ServerEvent,
 }
 
-#[derive(Debug, bincode::Decode, bincode::Encode)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct IconData {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, bincode::Decode, bincode::Encode)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Tooltip {
     pub title: String,
     pub description: String,
