@@ -1,0 +1,10 @@
+host:
+  rpm:
+    build:
+    - sni-icon.spec
+vm:
+  rpm:
+    build:
+    - sni-icon.spec
+  debian:
+    build: []
