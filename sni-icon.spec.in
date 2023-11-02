@@ -20,6 +20,7 @@ URL:            git+https://github.com/DemiMarie/sni-icon.git
 Source:         sni-icon.tar.gz
 
 BuildRequires:  cargo-rpm-macros >= 24
+BuildRequires:  rust-libdbus-sys-devel >= 0.2.5
 
 %global _description %{expand:
 StatusNotifierItem proxy for Qubes OS and Spectrum OS.}
