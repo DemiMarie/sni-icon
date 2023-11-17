@@ -47,11 +47,31 @@ StatusNotifierItem proxy for Qubes OS and Spectrum OS.}
 %cargo_test
 %endif
 
-%files
+%package license
+Summary: License files for the SNI proxy
+%description license
+License files for the SNI proxy
+
+%files license
 # FIXME: no license files detected
 %license LICENSE.dependencies
-%{_bindir}/client
-%{_bindir}/server
+
+%package daemon
+Summary: Host-side code for the SNI proxy
+Requires: %{name}-license
+%description daemon
+The GUI domain-side part of the SNI proxy.
+
+%package agent
+Summary: Agent-side code for the SNI proxy
+Requires: %{name}-license
+%description agent
+The guest-side part of the SNI proxy.
+
+%files daemon
+%{_bindir}/sni-daemon
+%files agent
+%{_bindir}/sni-agent
 
 %changelog
 %autochangelog

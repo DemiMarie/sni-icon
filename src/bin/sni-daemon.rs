@@ -1,4 +1,4 @@
-#[path = "client/item.rs"]
+#[path = "sni-daemon/item.rs"]
 mod item;
 
 use dbus::nonblock::Proxy;
