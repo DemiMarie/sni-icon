@@ -1,0 +1,12 @@
+[package]
+name = "qubes-utils"
+version = "0.1.0"
+edition = "2021"
+description = """Safe bindings to the Qubes OS pure (no I/O) C library"""
+repository = "https://github.com/QubesOS/qubes-linux-utils"
+license = "GPLv2+"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+qubes-utils-sys = { path = "../qubes-utils-sys", version = "0.1.0" }

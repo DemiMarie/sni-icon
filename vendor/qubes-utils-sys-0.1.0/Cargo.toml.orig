@@ -1,0 +1,8 @@
+[package]
+version = "0.1.0"
+name = "qubes-utils-sys"
+edition = "2021"
+links = "qubes-pure"
+description = """Raw unsafe bindings to the Qubes OS pure (no I/O) C library"""
+repository = "https://github.com/QubesOS/qubes-linux-utils"
+license = "GPLv2+"
