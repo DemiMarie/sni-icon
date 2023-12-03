@@ -28,7 +28,8 @@ mio = "*"
 serde = { version = "1.0.188", features = ["serde_derive"]}
 socket2 = { version = "0.5.4" }
 libdbus-sys = "0.2.5"
-qubes-utils = "0.1.0"
+qubes-utils = { path = "vendor/qubes-utils-0.1.0" }
+qubes-utils-sys = { path = "vendor/qubes-utils-sys-0.1.0" }
 
 [patch.crates-io]
 qubes-utils = { path = "vendor/qubes-utils-0.1.0" }
